@@ -11,3 +11,45 @@ The process involved two main stages:
 The transformation process, as documented in `cline-task-transform-backend-into-python.md`, involved significant interaction with the LLM.  While the exact cost is not explicitly stated, the process was resource-intensive, frequently reaching both per-minute and daily token limits for Claude Sonnet 3.5.  These limitations necessitated frequent pauses, extending the overall project timeline.  Despite these interruptions, the LLM proved effective in translating the complex TypeScript codebase into a functional Python equivalent.
 
 This fork serves as a practical example of using "cline" and large language models for codebase refactoring and language migration.  It showcases the capabilities of these tools in a real-world scenario.
+
+## Development with Dev Container
+
+This project now supports development using Visual Studio Code's Dev Containers. This feature allows you to use a Docker container as a full-featured development environment, ensuring consistency across different development machines.
+
+### Prerequisites
+
+1. Install [Docker](https://www.docker.com/get-started) on your machine.
+2. Install [Visual Studio Code](https://code.visualstudio.com/).
+3. Install the [Remote - Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension in VS Code.
+
+### Using the Dev Container
+
+1. Clone this repository to your local machine.
+2. Open the project folder in Visual Studio Code.
+3. When prompted, click "Reopen in Container" or run the "Remote-Containers: Reopen in Container" command from the Command Palette (F1).
+4. VS Code will build the Docker image and start the container. This may take a few minutes the first time.
+5. Once the container is running, the post-create command will automatically install all Python and Node.js dependencies.
+6. You'll now have a fully configured development environment with all necessary dependencies installed.
+
+The Dev Container includes:
+- Python 3.11
+- Node.js 18 (installed via devcontainer features)
+- Yarn
+- All Python dependencies specified in `backend/requirements.txt`
+- All Node.js dependencies specified in `package.json`
+- VS Code extensions for Python, Pylance, ESLint, and Prettier
+
+You can now develop, run, and debug your code directly within the container. The backend directory is added to the PATH, allowing easier execution of Python scripts.
+
+### Customization
+
+If you need to customize the Dev Container configuration, you can modify the following files:
+- `.devcontainer/devcontainer.json`: Configures the Dev Container features, VS Code settings, and post-create commands.
+- `.devcontainer/Dockerfile`: Defines the base Docker image and additional setup steps.
+
+Key aspects of the current setup:
+- The Dockerfile uses a Python 3.11 base image and sets up the working environment.
+- Node.js is installed via devcontainer features in the devcontainer.json file.
+- Dependencies are installed via a post-create command, ensuring they're always up-to-date.
+
+Remember to rebuild the container after making changes to these files by running the "Remote-Containers: Rebuild Container" command from the Command Palette.
