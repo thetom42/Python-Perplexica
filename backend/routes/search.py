@@ -1,34 +1,99 @@
-from fastapi import APIRouter, HTTPException, Depends
-from langchain.schema import BaseMessage
-from typing import List
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from backend.agents.web_search_agent import handle_web_search
-from backend.lib.providers import get_chat_model, get_embeddings_model
+from typing import List, Dict, Any, Optional, Tuple
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
+from langchain.chat_models.base import BaseChatModel
+from langchain.embeddings.base import Embeddings
+from langchain.chat_models import ChatOpenAI
+from backend.lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
+from backend.websocket.message_handler import search_handlers
 from backend.utils.logger import logger
+import json
 
 router = APIRouter()
 
-class SearchRequest(BaseModel):
+class ChatModel(BaseModel):
+    provider: str
+    model: str
+    customOpenAIBaseURL: Optional[str] = None
+    customOpenAIKey: Optional[str] = None
+
+class EmbeddingModel(BaseModel):
+    provider: str
+    model: str
+
+class ChatRequestBody(BaseModel):
+    optimizationMode: str = 'balanced'
+    focusMode: str
+    chatModel: Optional[ChatModel] = None
+    embeddingModel: Optional[EmbeddingModel] = None
     query: str
-    history: List[dict]
+    history: List[Tuple[str, str]] = []
 
-class SearchResponse(BaseModel):
-    type: str
-    data: str
-
-@router.post("/web", response_model=SearchResponse)
-async def web_search(request: SearchRequest):
+@router.post("/")
+async def search(body: ChatRequestBody):
     try:
-        llm = get_chat_model()
-        embeddings = get_embeddings_model()
+        if not body.focusMode or not body.query:
+            raise HTTPException(status_code=400, detail="Missing focus mode or query")
 
-        # Convert dict history to BaseMessage objects
-        history = [BaseMessage(**msg) for msg in request.history]
+        history: List[BaseMessage] = [
+            HumanMessage(content=msg[1]) if msg[0] == 'human' else AIMessage(content=msg[1])
+            for msg in body.history
+        ]
 
-        result = await handle_web_search(request.query, history, llm, embeddings)
-        return SearchResponse(**result)
+        chat_model_providers = await get_available_chat_model_providers()
+        embedding_model_providers = await get_available_embedding_model_providers()
+
+        chat_model_provider = body.chatModel.provider if body.chatModel else next(iter(chat_model_providers))
+        chat_model = body.chatModel.model if body.chatModel else next(iter(chat_model_providers[chat_model_provider]))
+
+        embedding_model_provider = body.embeddingModel.provider if body.embeddingModel else next(iter(embedding_model_providers))
+        embedding_model = body.embeddingModel.model if body.embeddingModel else next(iter(embedding_model_providers[embedding_model_provider]))
+
+        llm: Optional[BaseChatModel] = None
+        embeddings: Optional[Embeddings] = None
+
+        if body.chatModel and body.chatModel.provider == 'custom_openai':
+            if not body.chatModel.customOpenAIBaseURL or not body.chatModel.customOpenAIKey:
+                raise HTTPException(status_code=400, detail="Missing custom OpenAI base URL or key")
+
+            llm = ChatOpenAI(
+                model_name=body.chatModel.model,
+                openai_api_key=body.chatModel.customOpenAIKey,
+                temperature=0.7,
+                base_url=body.chatModel.customOpenAIBaseURL,
+            )
+        elif chat_model_provider in chat_model_providers and chat_model in chat_model_providers[chat_model_provider]:
+            llm = chat_model_providers[chat_model_provider][chat_model].model
+
+        if embedding_model_provider in embedding_model_providers and embedding_model in embedding_model_providers[embedding_model_provider]:
+            embeddings = embedding_model_providers[embedding_model_provider][embedding_model].model
+
+        if not llm or not embeddings:
+            raise HTTPException(status_code=400, detail="Invalid model selected")
+
+        search_handler = search_handlers.get(body.focusMode)
+        if not search_handler:
+            raise HTTPException(status_code=400, detail="Invalid focus mode")
+
+        async def event_stream():
+            message = ""
+            sources = []
+
+            async for data in search_handler(body.query, history, llm, embeddings, body.optimizationMode):
+                parsed_data = json.loads(data)
+                if parsed_data["type"] == "response":
+                    message += parsed_data["data"]
+                    yield json.dumps({"type": "response", "data": parsed_data["data"]}) + "\n"
+                elif parsed_data["type"] == "sources":
+                    sources = parsed_data["data"]
+                    yield json.dumps({"type": "sources", "data": sources}) + "\n"
+
+            yield json.dumps({"type": "end", "data": {"message": message, "sources": sources}}) + "\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
     except Exception as e:
-        logger.error("Error in web search: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="An error occurred during the web search") from e
-
-# Add more search endpoints (academic, image, etc.) as needed
+        logger.error(f"Error in getting search results: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error has occurred.")

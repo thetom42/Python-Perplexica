@@ -1,6 +1,6 @@
 # Python-Perplexica
 
-## This repository is a fork of the [original Perplexica project](https://github.com/ItzCrazyKns/Perplexica), demonstrating the transformation of its TypeScript backend into a Python backend. This transformation was achieved using the Visual Studio Code extension "cline" (formerly "claude-dev") and the Claude Sonnet 3.5 language model.
+## This repository is a fork of the [original Perplexica project](https://github.com/ItzCrazyKns/Perplexica), demonstrating the transformation of its TypeScript backend into a Python backend. This transformation was achieved using the Visual Studio Code extension "cline" (formerly "claude-dev") and the Claude Sonnet 3.5 language model as well as Google Gemini 1.5 Flash.
 
 The process involved two main stages:
 
