@@ -32,7 +32,7 @@ This project now supports development using Visual Studio Code's Dev Containers.
 6. You'll now have a fully configured development environment with all necessary dependencies installed.
 
 The Dev Container includes:
-- Python 3.11
+- Python 3.12
 - Node.js 18 (installed via devcontainer features)
 - Yarn
 - All Python dependencies specified in `backend/requirements.txt`
