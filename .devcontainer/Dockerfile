@@ -13,6 +13,11 @@ ENV SHELL /bin/bash
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
+# Install Node.js and npm
+RUN apt-get update && apt-get install -y curl
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+RUN apt-get install -y nodejs
+
 # Install Yarn
 RUN npm install -g yarn
 
