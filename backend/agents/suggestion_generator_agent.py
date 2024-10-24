@@ -1,68 +1,119 @@
 """
 Suggestion Generator Agent Module
 
-This module provides functionality for generating relevant and diverse suggestions
-based on a user's query and chat history using a language model.
+This module provides functionality for generating relevant suggestions based on chat history.
+It analyzes the conversation context to provide meaningful follow-up questions or topics.
 """
 
+from typing import List, Dict, Any, Callable
 from langchain.schema import BaseMessage
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
-from langchain.prompts import ChatPromptTemplate
-from typing import List, Dict, Any
+from langchain.prompts import PromptTemplate
+from backend.utils.format_history import format_chat_history_as_string
+from backend.lib.output_parsers.list_line_output_parser import LineListOutputParser
+from backend.utils.logger import logger
 
-async def handle_suggestion_generation(query: str, history: List[BaseMessage], llm: BaseChatModel, embeddings: Embeddings) -> Dict[str, Any]:
+SUGGESTION_GENERATOR_PROMPT = """
+You are an AI suggestion generator for an AI powered search engine. You will be given a conversation below. You need to generate 4-5 suggestions based on the conversation. The suggestion should be relevant to the conversation that can be used by the user to ask the chat model for more information.
+You need to make sure the suggestions are relevant to the conversation and are helpful to the user. Keep a note that the user might use these suggestions to ask a chat model for more information. 
+Make sure the suggestions are medium in length and are informative and relevant to the conversation.
+
+Provide these suggestions separated by newlines between the XML tags <suggestions> and </suggestions>. For example:
+
+<suggestions>
+Tell me more about SpaceX and their recent projects
+What is the latest news on SpaceX?
+Who is the CEO of SpaceX?
+</suggestions>
+
+Conversation:
+{chat_history}
+"""
+
+class RunnableSequence:
+    """A simple implementation of a runnable sequence similar to TypeScript's RunnableSequence."""
+    
+    def __init__(self, steps: List[Callable]):
+        """Initialize the RunnableSequence with a list of callable steps."""
+        self.steps = steps
+    
+    async def invoke(self, input_data: Dict[str, Any]) -> Any:
+        """Execute the sequence of steps on the input data."""
+        result = input_data
+        for step in self.steps:
+            result = await step(result)
+        return result
+
+async def create_suggestion_generator_chain(llm: BaseChatModel) -> RunnableSequence:
     """
-    Generate suggestions based on the user's query and chat history.
-
-    This function performs the following steps:
-    1. Creates a language model chain with a specific prompt for generating suggestions.
-    2. Runs the chain with the formatted chat history and current query.
-    3. Returns the generated suggestions.
-
+    Create the suggestion generator chain.
+    
     Args:
-        query (str): The current user query.
-        history (List[BaseMessage]): The chat history.
-        llm (BaseChatModel): The language model to use for generating suggestions.
-        embeddings (Embeddings): The embeddings model (not used in the current implementation).
-
+        llm: The language model to use for generating suggestions
+        
     Returns:
-        Dict[str, Any]: A dictionary containing the type of response and the generated suggestions.
+        RunnableSequence: A chain that processes chat history and generates suggestions
     """
-    suggestion_generator = LLMChain(
+    async def map_input(input_data: Dict[str, Any]) -> Dict[str, str]:
+        """Map the input data to the format expected by the LLM chain."""
+        return {
+            "chat_history": format_chat_history_as_string(input_data["chat_history"])
+        }
+    
+    chain = LLMChain(
         llm=llm,
-        prompt=ChatPromptTemplate.from_messages([
-            ("system", """
-            You are an AI suggestion generator. Based on the user's query and chat history,
-            generate a list of 5 relevant and diverse suggestions for further exploration or discussion.
-            These suggestions should be related to the topic but offer new angles or deeper insights.
-            Format your response as a numbered list.
-            """),
-            ("human", "Chat history:\n{history}\n\nCurrent query: {query}\n\nGenerate 5 suggestions:"),
-        ])
+        prompt=PromptTemplate.from_template(SUGGESTION_GENERATOR_PROMPT)
     )
+    
+    async def run_chain(input_data: Dict[str, str]) -> str:
+        """Run the LLM chain to generate suggestions."""
+        try:
+            return await chain.arun(**input_data)
+        except Exception as e:
+            logger.error(f"Error in suggestion generation chain: {str(e)}")
+            return "<suggestions>\nUnable to generate suggestions at this time\n</suggestions>"
+    
+    output_parser = LineListOutputParser(key="suggestions")
+    
+    async def parse_output(output: str) -> List[str]:
+        """Parse the LLM output into a list of suggestions."""
+        try:
+            return await output_parser.parse(output)
+        except Exception as e:
+            logger.error(f"Error parsing suggestions: {str(e)}")
+            return ["Unable to generate suggestions at this time"]
+    
+    return RunnableSequence([
+        map_input,
+        run_chain,
+        parse_output
+    ])
 
-    suggestions = await suggestion_generator.arun(history=format_chat_history(history), query=query)
-
-    return {
-        "type": "suggestions",
-        "data": suggestions
-    }
-
-def format_chat_history(history: List[BaseMessage]) -> str:
+async def generate_suggestions(
+    history: List[BaseMessage],
+    llm: BaseChatModel
+) -> List[str]:
     """
-    Format the chat history into a string representation.
-
-    This function takes the last 5 messages from the chat history and
-    formats them into a string, with each message prefixed by its type.
+    Generate suggestions based on chat history.
 
     Args:
-        history (List[BaseMessage]): The full chat history.
+        history: The chat history to generate suggestions from
+        llm: The language model to use for generating suggestions
 
     Returns:
-        str: A formatted string representation of the last 5 messages in the chat history.
+        List[str]: A list of generated suggestions. Returns a single error message
+                  if suggestion generation fails.
     """
-    return "\n".join([f"{msg.type}: {msg.content}" for msg in history[-5:]])  # Only use last 5 messages for context
-
-# Additional helper functions can be implemented as needed
+    try:
+        # Set temperature to 0 for more consistent suggestions
+        if hasattr(llm, "temperature"):
+            llm.temperature = 0
+        
+        suggestion_generator_chain = await create_suggestion_generator_chain(llm)
+        return await suggestion_generator_chain.invoke({
+            "chat_history": history
+        })
+    except Exception as e:
+        logger.error(f"Error in generate_suggestions: {str(e)}")
+        return ["Unable to generate suggestions at this time"]
