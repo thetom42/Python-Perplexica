@@ -5,15 +5,16 @@ This module provides functionality for performing image searches using multiple 
 engines (Bing Images, Google Images) through the SearxNG search engine interface.
 """
 
-from typing import List, Dict, Any, Callable, Optional
-from langchain.schema import BaseMessage
+from typing import List, Dict, Any, Literal, AsyncGenerator
+from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import StrOutputParser
 from backend.lib.searxng import search_searxng
-from backend.utils.format_history import format_chat_history_as_string
 from backend.utils.logger import logger
+from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
 
 IMAGE_SEARCH_CHAIN_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question so it is a standalone question that can be used by the LLM to search the web for images.
@@ -36,102 +37,127 @@ Follow up question: {query}
 Rephrased question:
 """
 
-class RunnableSequence:
-    """A simple implementation of a runnable sequence similar to TypeScript's RunnableSequence."""
-    
-    def __init__(self, steps: List[Callable]):
-        """Initialize the RunnableSequence with a list of callable steps."""
-        self.steps = steps
-    
-    async def invoke(self, input_data: Dict[str, Any]) -> Any:
-        """Execute the sequence of steps on the input data."""
-        result = input_data
-        for step in self.steps:
-            result = await step(result)
-        return result
+class ImageSearchAgent(AbstractAgent):
+    """Agent for performing image searches and retrieving results."""
 
-async def create_image_search_chain(llm: BaseChatModel) -> RunnableSequence:
-    """
-    Create the image search chain.
-    
-    Args:
-        llm: The language model to use for query processing
+    async def create_retriever_chain(self) -> RunnableSequence:
+        """Create the image search retriever chain."""
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate.from_template(IMAGE_SEARCH_CHAIN_PROMPT)
+        )
+        str_parser = StrOutputParser()
         
-    Returns:
-        RunnableSequence: A chain that processes queries and retrieves image results
-    """
-    async def map_input(input_data: Dict[str, Any]) -> Dict[str, str]:
-        """Map the input data to the format expected by the LLM chain."""
+        async def process_input(input_data: Dict[str, Any]) -> str:
+            """Process the input through the LLM chain."""
+            try:
+                return await chain.arun(
+                    chat_history=input_data["chat_history"],
+                    query=input_data["query"]
+                )
+            except Exception as e:
+                logger.error(f"Error in LLM chain: {str(e)}")
+                return input_data["query"]
+        
+        async def perform_search(query: str) -> Dict[str, Any]:
+            """Perform the image search using multiple search engines."""
+            try:
+                res = await search_searxng(query, {
+                    "engines": ["bing images", "google images"]
+                })
+                
+                images = []
+                for result in res["results"]:
+                    if result.get("img_src") and result.get("url") and result.get("title"):
+                        images.append({
+                            "img_src": result["img_src"],
+                            "url": result["url"],
+                            "title": result["title"]
+                        })
+                
+                # Convert image results to Documents for compatibility with base class
+                documents = [
+                    Document(
+                        page_content="",  # Image searches don't need text content
+                        metadata={
+                            "img_src": img["img_src"],
+                            "url": img["url"],
+                            "title": img["title"]
+                        }
+                    )
+                    for img in images[:10]  # Return top 10 images
+                ]
+                
+                return {"query": query, "docs": documents}
+                
+            except Exception as e:
+                logger.error(f"Error in image search: {str(e)}")
+                return {"query": query, "docs": []}
+        
+        return RunnableSequence([
+            process_input,
+            str_parser.parse,
+            perform_search
+        ])
+
+    async def create_answering_chain(self) -> RunnableSequence:
+        """Create the image search answering chain."""
+        retriever_chain = await self.create_retriever_chain()
+        
+        async def process_results(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Process the retriever results into the final format."""
+            try:
+                result = await retriever_chain.invoke(input_data)
+                
+                if not result["docs"]:
+                    return {
+                        "type": "response",
+                        "data": []
+                    }
+                
+                # Extract image data from documents
+                images = [
+                    {
+                        "img_src": doc.metadata["img_src"],
+                        "url": doc.metadata["url"],
+                        "title": doc.metadata["title"]
+                    }
+                    for doc in result["docs"]
+                ]
+                
+                return {
+                    "type": "response",
+                    "data": images
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing image search results: {str(e)}")
+                return {
+                    "type": "error",
+                    "data": "An error occurred while processing the image search results"
+                }
+        
+        return RunnableSequence([process_results])
+
+    def format_prompt(self, query: str, context: str) -> str:
+        """Format the prompt for the language model."""
+        # Not used for image search as it doesn't require text generation
+        return ""
+
+    async def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse the response from the language model."""
+        # Not used for image search as it doesn't require text generation
         return {
-            "chat_history": format_chat_history_as_string(input_data["chat_history"]),
-            "query": input_data["query"]
+            "type": "response",
+            "data": response
         }
-    
-    chain = LLMChain(
-        llm=llm,
-        prompt=PromptTemplate.from_template(IMAGE_SEARCH_CHAIN_PROMPT)
-    )
-    str_parser = StrOutputParser()
-    
-    async def run_chain(input_data: Dict[str, str]) -> str:
-        """Run the LLM chain to process the query."""
-        try:
-            return await chain.arun(**input_data)
-        except Exception as e:
-            logger.error(f"Error in LLM chain: {str(e)}")
-            return input_data["query"]  # Fallback to original query
-    
-    async def parse_output(output: str) -> str:
-        """Parse the LLM output into a search query."""
-        try:
-            return str_parser.parse(output)
-        except Exception as e:
-            logger.error(f"Error parsing output: {str(e)}")
-            return output  # Return unparsed output as fallback
-    
-    async def perform_search(query: str) -> List[Dict[str, str]]:
-        """
-        Perform the image search using multiple search engines.
-        
-        Args:
-            query: The search query
-            
-        Returns:
-            List[Dict[str, str]]: A list of image results, each containing img_src, url, and title
-        """
-        try:
-            res = await search_searxng(query, {
-                "engines": ["bing images", "google images"]
-            })
-            
-            images = []
-            for result in res["results"]:
-                if result.get("img_src") and result.get("url") and result.get("title"):
-                    images.append({
-                        "img_src": result["img_src"],
-                        "url": result["url"],
-                        "title": result["title"]
-                    })
-            
-            return images[:10]  # Return top 10 images
-            
-        except Exception as e:
-            logger.error(f"Error in image search: {str(e)}")
-            return []  # Return empty list on error
-    
-    return RunnableSequence([
-        map_input,
-        run_chain,
-        parse_output,
-        perform_search
-    ])
 
 async def handle_image_search(
     query: str,
     history: List[BaseMessage],
     llm: BaseChatModel,
-    *args: Any,  # Accept but ignore additional arguments for compatibility
-    **kwargs: Any
+    embeddings: Embeddings,
+    optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
 ) -> List[Dict[str, str]]:
     """
     Handle an image search query.
@@ -140,25 +166,17 @@ async def handle_image_search(
         query: The image search query
         history: The chat history
         llm: The language model to use for query processing
-        *args: Additional positional arguments (ignored)
-        **kwargs: Additional keyword arguments (ignored)
+        embeddings: The embeddings model (unused for image search)
+        optimization_mode: The optimization mode (unused for image search)
 
     Returns:
         List[Dict[str, str]]: A list of image results, each containing:
             - img_src: URL of the image
             - url: URL of the page containing the image
             - title: Title of the image or containing page
-            
-    Note:
-        This function accepts additional arguments for compatibility with other agents
-        but only uses query, history, and llm.
     """
-    try:
-        image_search_chain = await create_image_search_chain(llm)
-        return await image_search_chain.invoke({
-            "chat_history": history,
-            "query": query
-        })
-    except Exception as e:
-        logger.error(f"Error in image search handler: {str(e)}")
-        return []  # Return empty list on error
+    agent = ImageSearchAgent(llm, embeddings, optimization_mode)
+    async for result in agent.handle_search(query, history):
+        if result["type"] == "response":
+            return result["data"]
+    return []  # Return empty list if no results or error

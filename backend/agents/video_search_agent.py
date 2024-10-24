@@ -6,15 +6,16 @@ with YouTube as the primary source. It specifically handles video content with s
 thumbnails and embedded iframes.
 """
 
-from typing import List, Dict, Any, Callable, Optional
-from langchain.schema import BaseMessage
+from typing import List, Dict, Any, Literal, AsyncGenerator
+from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import StrOutputParser
 from backend.lib.searxng import search_searxng
-from backend.utils.format_history import format_chat_history_as_string
 from backend.utils.logger import logger
+from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
 
 VIDEO_SEARCH_CHAIN_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question so it is a standalone question that can be used by the LLM to search Youtube for videos.
@@ -37,110 +38,122 @@ Follow up question: {query}
 Rephrased question:
 """
 
-class RunnableSequence:
-    """A simple implementation of a runnable sequence similar to TypeScript's RunnableSequence."""
-    
-    def __init__(self, steps: List[Callable]):
-        """Initialize the RunnableSequence with a list of callable steps."""
-        self.steps = steps
-    
-    async def invoke(self, input_data: Dict[str, Any]) -> Any:
-        """Execute the sequence of steps on the input data."""
-        result = input_data
-        for step in self.steps:
-            result = await step(result)
-        return result
+class VideoSearchAgent(AbstractAgent):
+    """Agent for performing video searches and retrieving results."""
 
-async def create_video_search_chain(llm: BaseChatModel) -> RunnableSequence:
-    """
-    Create the video search chain.
-    
-    Args:
-        llm: The language model to use for query processing
+    async def create_retriever_chain(self) -> RunnableSequence:
+        """Create the video search retriever chain."""
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate.from_template(VIDEO_SEARCH_CHAIN_PROMPT)
+        )
+        str_parser = StrOutputParser()
         
-    Returns:
-        RunnableSequence: A chain that processes queries and retrieves video results
-    """
-    async def map_input(input_data: Dict[str, Any]) -> Dict[str, str]:
-        """Map the input data to the format expected by the LLM chain."""
+        async def process_input(input_data: Dict[str, Any]) -> str:
+            """Process the input through the LLM chain."""
+            try:
+                return await chain.arun(
+                    chat_history=input_data["chat_history"],
+                    query=input_data["query"]
+                )
+            except Exception as e:
+                logger.error(f"Error in LLM chain: {str(e)}")
+                return input_data["query"]
+        
+        async def perform_search(query: str) -> Dict[str, Any]:
+            """Perform the video search using YouTube through SearxNG."""
+            try:
+                res = await search_searxng(query, {
+                    "engines": ["youtube"]
+                })
+                
+                documents = []
+                for result in res["results"]:
+                    if (result.get("thumbnail") and 
+                        result.get("url") and 
+                        result.get("title") and 
+                        result.get("iframe_src")):
+                        documents.append(Document(
+                            page_content="",  # Video searches don't need text content
+                            metadata={
+                                "img_src": result["thumbnail"],
+                                "url": result["url"],
+                                "title": result["title"],
+                                "iframe_src": result["iframe_src"]
+                            }
+                        ))
+                
+                return {"query": query, "docs": documents[:10]}  # Return top 10 videos
+                
+            except Exception as e:
+                logger.error(f"Error in video search: {str(e)}")
+                return {"query": query, "docs": []}
+        
+        return RunnableSequence([
+            process_input,
+            str_parser.parse,
+            perform_search
+        ])
+
+    async def create_answering_chain(self) -> RunnableSequence:
+        """Create the video search answering chain."""
+        retriever_chain = await self.create_retriever_chain()
+        
+        async def process_results(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Process the retriever results into the final format."""
+            try:
+                result = await retriever_chain.invoke(input_data)
+                
+                if not result["docs"]:
+                    return {
+                        "type": "response",
+                        "data": []
+                    }
+                
+                # Extract video data from documents
+                videos = [
+                    {
+                        "img_src": doc.metadata["img_src"],
+                        "url": doc.metadata["url"],
+                        "title": doc.metadata["title"],
+                        "iframe_src": doc.metadata["iframe_src"]
+                    }
+                    for doc in result["docs"]
+                ]
+                
+                return {
+                    "type": "response",
+                    "data": videos
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing video search results: {str(e)}")
+                return {
+                    "type": "error",
+                    "data": "An error occurred while processing the video search results"
+                }
+        
+        return RunnableSequence([process_results])
+
+    def format_prompt(self, query: str, context: str) -> str:
+        """Format the prompt for the language model."""
+        # Not used for video search as it doesn't require text generation
+        return ""
+
+    async def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse the response from the language model."""
+        # Not used for video search as it doesn't require text generation
         return {
-            "chat_history": format_chat_history_as_string(input_data["chat_history"]),
-            "query": input_data["query"]
+            "type": "response",
+            "data": response
         }
-    
-    chain = LLMChain(
-        llm=llm,
-        prompt=PromptTemplate.from_template(VIDEO_SEARCH_CHAIN_PROMPT)
-    )
-    str_parser = StrOutputParser()
-    
-    async def run_chain(input_data: Dict[str, str]) -> str:
-        """Run the LLM chain to process the query."""
-        try:
-            return await chain.arun(**input_data)
-        except Exception as e:
-            logger.error(f"Error in LLM chain: {str(e)}")
-            return input_data["query"]  # Fallback to original query
-    
-    async def parse_output(output: str) -> str:
-        """Parse the LLM output into a search query."""
-        try:
-            return str_parser.parse(output)
-        except Exception as e:
-            logger.error(f"Error parsing output: {str(e)}")
-            return output  # Return unparsed output as fallback
-    
-    async def perform_search(query: str) -> List[Dict[str, str]]:
-        """
-        Perform the video search using YouTube through SearxNG.
-        
-        Args:
-            query: The search query
-            
-        Returns:
-            List[Dict[str, str]]: A list of video results, each containing:
-                - img_src: URL of the video thumbnail
-                - url: URL of the video page
-                - title: Title of the video
-                - iframe_src: Embedded iframe URL for the video
-        """
-        try:
-            res = await search_searxng(query, {
-                "engines": ["youtube"]
-            })
-            
-            videos = []
-            for result in res["results"]:
-                if (result.get("thumbnail") and 
-                    result.get("url") and 
-                    result.get("title") and 
-                    result.get("iframe_src")):
-                    videos.append({
-                        "img_src": result["thumbnail"],
-                        "url": result["url"],
-                        "title": result["title"],
-                        "iframe_src": result["iframe_src"]
-                    })
-            
-            return videos[:10]  # Return top 10 videos
-            
-        except Exception as e:
-            logger.error(f"Error in video search: {str(e)}")
-            return []  # Return empty list on error
-    
-    return RunnableSequence([
-        map_input,
-        run_chain,
-        parse_output,
-        perform_search
-    ])
 
 async def handle_video_search(
     query: str,
     history: List[BaseMessage],
     llm: BaseChatModel,
-    *args: Any,  # Accept but ignore additional arguments for compatibility
-    **kwargs: Any
+    embeddings: Embeddings,
+    optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
 ) -> List[Dict[str, str]]:
     """
     Handle a video search query.
@@ -149,8 +162,8 @@ async def handle_video_search(
         query: The video search query
         history: The chat history
         llm: The language model to use for query processing
-        *args: Additional positional arguments (ignored)
-        **kwargs: Additional keyword arguments (ignored)
+        embeddings: The embeddings model (unused for video search)
+        optimization_mode: The optimization mode (unused for video search)
 
     Returns:
         List[Dict[str, str]]: A list of video results, each containing:
@@ -158,17 +171,9 @@ async def handle_video_search(
             - url: URL of the video page
             - title: Title of the video
             - iframe_src: Embedded iframe URL for the video
-            
-    Note:
-        This function accepts additional arguments for compatibility with other agents
-        but only uses query, history, and llm.
     """
-    try:
-        video_search_chain = await create_video_search_chain(llm)
-        return await video_search_chain.invoke({
-            "chat_history": history,
-            "query": query
-        })
-    except Exception as e:
-        logger.error(f"Error in video search handler: {str(e)}")
-        return []  # Return empty list on error
+    agent = VideoSearchAgent(llm, embeddings, optimization_mode)
+    async for result in agent.handle_search(query, history):
+        if result["type"] == "response":
+            return result["data"]
+    return []  # Return empty list if no results or error
