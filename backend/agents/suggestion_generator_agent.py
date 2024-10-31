@@ -9,16 +9,16 @@ from typing import List, Dict, Any, Literal, AsyncGenerator, Optional
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.runnables import RunnableSequence, RunnablePassthrough
 from backend.utils.format_history import format_chat_history_as_string
-from backend.lib.output_parsers.list_line_output_parser import LineListOutputParser
+from backend.lib.output_parsers.list_line_output_parser import ListLineOutputParser
 from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.agents.abstract_agent import AbstractAgent
 
 SUGGESTION_GENERATOR_PROMPT = """
 You are an AI suggestion generator for an AI powered search engine. You will be given a conversation below. You need to generate 4-5 suggestions based on the conversation. The suggestion should be relevant to the conversation that can be used by the user to ask the chat model for more information.
-You need to make sure the suggestions are relevant to the conversation and are helpful to the user. Keep a note that the user might use these suggestions to ask a chat model for more information. 
+You need to make sure the suggestions are relevant to the conversation and are helpful to the user. Keep a note that the user might use these suggestions to ask a chat model for more information.
 Make sure the suggestions are medium in length and are informative and relevant to the conversation.
 
 Provide these suggestions separated by newlines between the XML tags <suggestions> and </suggestions>. For example:
@@ -41,36 +41,24 @@ class SuggestionGeneratorAgent(AbstractAgent):
         async def process_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the input and return empty docs since we don't need retrieval."""
             return {"query": "", "docs": []}
-        
+
         return RunnableSequence([process_input])
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the suggestion generator answering chain."""
-        async def map_input(input_data: Dict[str, Any]) -> Dict[str, str]:
-            """Map the input data to the format expected by the LLM chain."""
-            return {
-                "chat_history": format_chat_history_as_string(input_data["chat_history"])
-            }
-        
         # Set temperature to 0 for more consistent suggestions
         if hasattr(self.llm, "temperature"):
             self.llm.temperature = 0
-            
-        chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate.from_template(SUGGESTION_GENERATOR_PROMPT)
-        )
-        
-        async def run_chain(input_data: Dict[str, str]) -> str:
-            """Run the LLM chain to generate suggestions."""
-            try:
-                return await chain.arun(**input_data)
-            except Exception as e:
-                logger.error(f"Error in suggestion generation chain: {str(e)}")
-                return "<suggestions>\nUnable to generate suggestions at this time\n</suggestions>"
-        
-        output_parser = LineListOutputParser(key="suggestions")
-        
+
+        prompt = PromptTemplate.from_template(SUGGESTION_GENERATOR_PROMPT)
+        output_parser = ListLineOutputParser(key="suggestions")
+
+        async def map_input(input_data: Dict[str, Any]) -> Dict[str, str]:
+            """Map the input data to the format expected by the prompt."""
+            return {
+                "chat_history": format_chat_history_as_string(input_data["chat_history"])
+            }
+
         async def process_output(output: str) -> Dict[str, Any]:
             """Process the output into the expected format."""
             try:
@@ -80,17 +68,20 @@ class SuggestionGeneratorAgent(AbstractAgent):
                     "data": suggestions
                 }
             except Exception as e:
-                logger.error(f"Error parsing suggestions: {str(e)}")
+                logger.error("Error parsing suggestions: %s", str(e))
                 return {
                     "type": "response",
                     "data": ["Unable to generate suggestions at this time"]
                 }
-        
-        return RunnableSequence([
+
+        chain = RunnableSequence([
             map_input,
-            run_chain,
+            prompt | self.llm,
+            lambda x: x.content if hasattr(x, 'content') else x,
             process_output
         ])
+
+        return chain
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
@@ -127,17 +118,17 @@ async def generate_suggestions(
         # Create a dummy embeddings object if none provided since AbstractAgent requires it
         if embeddings is None:
             class DummyEmbeddings(Embeddings):
-                async def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                def embed_documents(self, texts: List[str]) -> List[List[float]]:
                     return [[0.0] for _ in texts]
-                async def embed_query(self, text: str) -> List[float]:
+                def embed_query(self, text: str) -> List[float]:
                     return [0.0]
             embeddings = DummyEmbeddings()
-            
+
         agent = SuggestionGeneratorAgent(llm, embeddings, optimization_mode)
         async for result in agent.handle_search("", history):  # Empty query since we only need history
             if result["type"] == "response":
                 return result["data"]
         return ["Unable to generate suggestions at this time"]
     except Exception as e:
-        logger.error(f"Error in generate_suggestions: {str(e)}")
+        logger.error("Error in generate_suggestions: %s", str(e))
         return ["Unable to generate suggestions at this time"]

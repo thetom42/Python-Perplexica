@@ -11,14 +11,14 @@ from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, PromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableSequence, RunnablePassthrough
 from backend.lib.searxng import search_searxng
 from backend.lib.link_document import get_documents_from_links
 from backend.utils.logger import logger
 from backend.lib.output_parsers.line_output_parser import LineOutputParser
-from backend.lib.output_parsers.list_line_output_parser import LineListOutputParser
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.lib.output_parsers.list_line_output_parser import ListLineOutputParser
+from backend.agents.abstract_agent import AbstractAgent
 
 BASIC_SEARCH_RETRIEVER_PROMPT = """
 You are an AI question rephraser. You will be given a conversation and a follow-up question,  you will have to rephrase the follow up question so it is a standalone question and can be used by another LLM to search the web for information to answer it.
@@ -38,97 +38,93 @@ class WebSearchAgent(AbstractAgent):
 
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the web search retriever chain."""
-        chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate.from_template(BASIC_SEARCH_RETRIEVER_PROMPT)
-        )
-        
-        async def process_input(input_data: Dict[str, Any]) -> str:
-            """Process the input through the LLM chain."""
-            try:
-                return await chain.arun(
-                    chat_history=input_data["chat_history"],
-                    query=input_data["query"]
-                )
-            except Exception as e:
-                logger.error(f"Error in LLM processing: {str(e)}")
-                return "<question>not_needed</question>"
-        
-        async def process_output(input: str) -> Dict[str, Any]:
+        prompt = PromptTemplate.from_template(BASIC_SEARCH_RETRIEVER_PROMPT)
+
+        chain = prompt | self.llm
+
+        async def process_output(llm_output: Any) -> Dict[str, Any]:
             """Process the LLM output and perform the web search."""
             try:
-                links_parser = LineListOutputParser(key="links")
+                output_text = llm_output.content if hasattr(llm_output, 'content') else str(llm_output)
+                links_parser = ListLineOutputParser(key="links")
                 question_parser = LineOutputParser(key="question")
-                
-                links = await links_parser.parse(input)
-                question = await question_parser.parse(input)
-                
+
+                links = await links_parser.parse(output_text)
+                question = await question_parser.parse(output_text)
+
                 if question == "not_needed":
                     return {"query": "", "docs": []}
-                    
+
                 if links:
                     if not question:
                         question = "summarize"
-                        
+
                     docs = []
                     link_docs = await get_documents_from_links({"links": links})
                     doc_groups = []
-                    
+
                     for doc in link_docs:
                         url_doc = next(
                             (d for d in doc_groups if d.metadata["url"] == doc.metadata["url"] and d.metadata.get("totalDocs", 0) < 10),
                             None
                         )
-                        
+
                         if not url_doc:
                             doc.metadata["totalDocs"] = 1
                             doc_groups.append(doc)
                         else:
                             url_doc.page_content += f"\n\n{doc.page_content}"
                             url_doc.metadata["totalDocs"] = url_doc.metadata.get("totalDocs", 0) + 1
-                    
+
                     for doc in doc_groups:
                         try:
-                            summary = await self.llm.agenerate([[
+                            summary_prompt = ChatPromptTemplate.from_messages([
                                 ("system", """
                                 You are a web search summarizer, tasked with summarizing a piece of text retrieved from a web search. Your job is to summarize the 
                                 text into a detailed, 2-4 paragraph explanation that captures the main ideas and provides a comprehensive answer to the query.
                                 If the query is "summarize", you should provide a detailed summary of the text. If the query is a specific question, you should answer it in the summary.
-                                
+
                                 - **Journalistic tone**: The summary should sound professional and journalistic, not too casual or vague.
                                 - **Thorough and detailed**: Ensure that every key point from the text is captured and that the summary directly answers the query.
                                 - **Not too lengthy, but detailed**: The summary should be informative but not excessively long. Focus on providing detailed information in a concise format.
                                 """),
-                                ("human", f"""
+                                ("human", """
                                 <query>
-                                {question}
+                                {query}
                                 </query>
 
                                 <text>
-                                {doc.page_content}
+                                {text}
                                 </text>
 
                                 Make sure to answer the query in the summary.
                                 """)
-                            ]])
-                            
+                            ])
+
+                            summary_chain = summary_prompt | self.llm
+
+                            summary = await summary_chain.invoke({
+                                "query": question,
+                                "text": doc.page_content
+                            })
+
                             docs.append(Document(
-                                page_content=summary.generations[0][0].text,
+                                page_content=summary.content,
                                 metadata={
                                     "title": doc.metadata["title"],
                                     "url": doc.metadata["url"]
                                 }
                             ))
                         except Exception as e:
-                            logger.error(f"Error summarizing document: {str(e)}")
+                            logger.error("Error summarizing document: %s", str(e))
                             docs.append(doc)
-                    
+
                     return {"query": question, "docs": docs}
                 else:
                     res = await search_searxng(question, {
                         "language": "en"
                     })
-                    
+
                     documents = [
                         Document(
                             page_content=result["content"],
@@ -140,18 +136,26 @@ class WebSearchAgent(AbstractAgent):
                         )
                         for result in res["results"]
                     ]
-                    
+
                     return {"query": question, "docs": documents}
             except Exception as e:
-                logger.error(f"Error in web search/processing: {str(e)}")
+                logger.error("Error in web search/processing: %s", str(e))
                 return {"query": "", "docs": []}
-        
-        return RunnableSequence([process_input, process_output])
+
+        retriever_chain = RunnableSequence([
+            {
+                "llm_output": chain,
+                "original_input": RunnablePassthrough()
+            },
+            lambda x: process_output(x["llm_output"])
+        ])
+
+        return retriever_chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the web search answering chain."""
         retriever_chain = await self.create_retriever_chain()
-        
+
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate the final response using the retriever chain and response chain."""
             try:
@@ -159,34 +163,33 @@ class WebSearchAgent(AbstractAgent):
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
-                
+
                 if not retriever_result["query"]:
                     return {
                         "type": "response",
                         "data": "I'm not sure how to help with that. Could you please ask a specific question?"
                     }
-                
+
                 reranked_docs = await self.rerank_docs(retriever_result["query"], retriever_result["docs"])
                 context = await self.process_docs(reranked_docs)
-                
-                response_chain = LLMChain(
-                    llm=self.llm,
-                    prompt=ChatPromptTemplate.from_messages([
-                        ("system", self.format_prompt(input_data["query"], context)),
-                        MessagesPlaceholder(variable_name="chat_history"),
-                        ("human", "{query}")
-                    ])
-                )
-                
-                response = await response_chain.arun(
-                    query=input_data["query"],
-                    chat_history=input_data["chat_history"],
-                    context=context
-                )
-                
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", self.format_prompt(input_data["query"], context)),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("human", "{query}")
+                ])
+
+                response_chain = prompt | self.llm
+
+                response = await response_chain.invoke({
+                    "query": input_data["query"],
+                    "chat_history": input_data["chat_history"],
+                    "context": context
+                })
+
                 return {
                     "type": "response",
-                    "data": response,
+                    "data": response.content,
                     "sources": [
                         {
                             "title": doc.metadata.get("title", ""),
@@ -197,12 +200,12 @@ class WebSearchAgent(AbstractAgent):
                     ]
                 }
             except Exception as e:
-                logger.error(f"Error in response generation: {str(e)}")
+                logger.error("Error in response generation: %s", str(e))
                 return {
                     "type": "error",
                     "data": "An error occurred while processing the web search results"
                 }
-        
+
         return RunnableSequence([generate_response])
 
     def format_prompt(self, query: str, context: str) -> str:

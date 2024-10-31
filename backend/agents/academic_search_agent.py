@@ -11,11 +11,11 @@ from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableSequence
 from backend.lib.searxng import search_searxng
 from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.agents.abstract_agent import AbstractAgent
 
 BASIC_ACADEMIC_SEARCH_RETRIEVER_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question if needed so it is a standalone question that can be used by the LLM to search the web for information.
@@ -43,33 +43,21 @@ class AcademicSearchAgent(AbstractAgent):
 
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the academic search retriever chain."""
-        retriever_chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate.from_template(BASIC_ACADEMIC_SEARCH_RETRIEVER_PROMPT)
-        )
-        
-        async def run_llm(input_data: Dict[str, Any]) -> str:
-            """Process the input through the LLM chain."""
-            try:
-                return await retriever_chain.arun(
-                    chat_history=input_data["chat_history"],
-                    query=input_data["query"]
-                )
-            except Exception as e:
-                logger.error(f"Error in LLM processing: {str(e)}")
-                return "not_needed"
-        
+        prompt = PromptTemplate.from_template(BASIC_ACADEMIC_SEARCH_RETRIEVER_PROMPT)
+
+        retriever_chain = prompt | self.llm
+
         async def process_llm_output(rephrased_query: str) -> Dict[str, Any]:
             """Process the LLM output and perform the academic search."""
             if rephrased_query.strip() == "not_needed":
                 return {"query": "", "docs": []}
-            
+
             try:
                 search_results = await search_searxng(rephrased_query, {
                     "language": "en",
                     "engines": ["arxiv", "google scholar", "pubmed"]
                 })
-                
+
                 documents = [
                     Document(
                         page_content=result["content"],
@@ -81,18 +69,26 @@ class AcademicSearchAgent(AbstractAgent):
                     )
                     for result in search_results["results"]
                 ]
-                
+
                 return {"query": rephrased_query, "docs": documents}
             except Exception as e:
-                logger.error(f"Error in academic search: {str(e)}")
+                logger.error("Error in academic search: %s", str(e))
                 return {"query": rephrased_query, "docs": []}
-        
-        return RunnableSequence([run_llm, process_llm_output])
+
+        chain = RunnableSequence([
+            {
+                "rephrased_query": retriever_chain,
+                "original_input": RunnablePassthrough()
+            },
+            lambda x: process_llm_output(x["rephrased_query"])
+        ])
+
+        return chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the academic search answering chain."""
         retriever_chain = await self.create_retriever_chain()
-        
+
         async def process_retriever_output(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the retriever output and generate the final response."""
             try:
@@ -100,35 +96,34 @@ class AcademicSearchAgent(AbstractAgent):
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
-                
+
                 if not retriever_result["query"]:
                     return {
                         "response": "I'm not sure how to help with that. Could you please ask a specific question?",
                         "sources": []
                     }
-                
+
                 reranked_docs = await self.rerank_docs(
                     retriever_result["query"],
                     retriever_result["docs"]
                 )
-                
+
                 context = await self.process_docs(reranked_docs)
-                
-                response_chain = LLMChain(
-                    llm=self.llm,
-                    prompt=ChatPromptTemplate.from_messages([
-                        ("system", self.format_prompt(retriever_result["query"], context)),
-                        ("human", "{query}"),
-                    ])
-                )
-                
-                response = await response_chain.arun(
-                    query=retriever_result["query"],
-                    context=context
-                )
-                
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", self.format_prompt(retriever_result["query"], context)),
+                    ("human", "{query}"),
+                ])
+
+                response_chain = prompt | self.llm
+
+                response = await response_chain.invoke({
+                    "query": retriever_result["query"],
+                    "context": context
+                })
+
                 return {
-                    "response": response,
+                    "response": response.content,
                     "sources": [
                         {
                             "title": doc.metadata.get("title", ""),
@@ -139,12 +134,12 @@ class AcademicSearchAgent(AbstractAgent):
                     ]
                 }
             except Exception as e:
-                logger.error(f"Error in response generation: {str(e)}")
+                logger.error("Error in response generation: %s", str(e))
                 return {
                     "response": "An error occurred while processing the academic search results",
                     "sources": []
                 }
-        
+
         return RunnableSequence([process_retriever_output])
 
     def format_prompt(self, query: str, context: str) -> str:

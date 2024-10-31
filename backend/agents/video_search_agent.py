@@ -10,12 +10,12 @@ from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableSequence, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 from backend.lib.searxng import search_searxng
 from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.agents.abstract_agent import AbstractAgent
 
 VIDEO_SEARCH_CHAIN_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question so it is a standalone question that can be used by the LLM to search Youtube for videos.
@@ -43,35 +43,23 @@ class VideoSearchAgent(AbstractAgent):
 
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the video search retriever chain."""
-        chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate.from_template(VIDEO_SEARCH_CHAIN_PROMPT)
-        )
+        prompt = PromptTemplate.from_template(VIDEO_SEARCH_CHAIN_PROMPT)
         str_parser = StrOutputParser()
-        
-        async def process_input(input_data: Dict[str, Any]) -> str:
-            """Process the input through the LLM chain."""
-            try:
-                return await chain.arun(
-                    chat_history=input_data["chat_history"],
-                    query=input_data["query"]
-                )
-            except Exception as e:
-                logger.error(f"Error in LLM chain: {str(e)}")
-                return input_data["query"]
-        
+
+        chain = prompt | self.llm | str_parser
+
         async def perform_search(query: str) -> Dict[str, Any]:
             """Perform the video search using YouTube through SearxNG."""
             try:
                 res = await search_searxng(query, {
                     "engines": ["youtube"]
                 })
-                
+
                 documents = []
                 for result in res["results"]:
-                    if (result.get("thumbnail") and 
-                        result.get("url") and 
-                        result.get("title") and 
+                    if (result.get("thumbnail") and
+                        result.get("url") and
+                        result.get("title") and
                         result.get("iframe_src")):
                         documents.append(Document(
                             page_content="",  # Video searches don't need text content
@@ -82,34 +70,38 @@ class VideoSearchAgent(AbstractAgent):
                                 "iframe_src": result["iframe_src"]
                             }
                         ))
-                
+
                 return {"query": query, "docs": documents[:10]}  # Return top 10 videos
-                
+
             except Exception as e:
-                logger.error(f"Error in video search: {str(e)}")
+                logger.error("Error in video search: %s", str(e))
                 return {"query": query, "docs": []}
-        
-        return RunnableSequence([
-            process_input,
-            str_parser.parse,
-            perform_search
+
+        retriever_chain = RunnableSequence([
+            {
+                "rephrased_query": chain,
+                "original_input": RunnablePassthrough()
+            },
+            lambda x: perform_search(x["rephrased_query"])
         ])
+
+        return retriever_chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the video search answering chain."""
         retriever_chain = await self.create_retriever_chain()
-        
+
         async def process_results(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the retriever results into the final format."""
             try:
                 result = await retriever_chain.invoke(input_data)
-                
+
                 if not result["docs"]:
                     return {
                         "type": "response",
                         "data": []
                     }
-                
+
                 # Extract video data from documents
                 videos = [
                     {
@@ -120,19 +112,19 @@ class VideoSearchAgent(AbstractAgent):
                     }
                     for doc in result["docs"]
                 ]
-                
+
                 return {
                     "type": "response",
                     "data": videos
                 }
-                
+
             except Exception as e:
-                logger.error(f"Error processing video search results: {str(e)}")
+                logger.error("Error processing video search results: %s", str(e))
                 return {
                     "type": "error",
                     "data": "An error occurred while processing the video search results"
                 }
-        
+
         return RunnableSequence([process_results])
 
     def format_prompt(self, query: str, context: str) -> str:

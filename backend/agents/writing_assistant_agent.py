@@ -9,14 +9,14 @@ from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableSequence
+from langchain_core.output_parsers import StrOutputParser
 from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.agents.abstract_agent import AbstractAgent
 
 WRITING_ASSISTANT_PROMPT = """
-You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are currently set on focus mode 'Writing Assistant', this means you will be helping the user write a response to a given query. 
+You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are currently set on focus mode 'Writing Assistant', this means you will be helping the user write a response to a given query.
 Since you are a writing assistant, you would not perform web searches. If you think you lack information to answer the query, you can ask the user for more information or suggest them to switch to a different focus mode.
 """
 
@@ -28,40 +28,39 @@ class WritingAssistantAgent(AbstractAgent):
         async def process_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the input and return empty docs since we don't need retrieval."""
             return {"query": input_data["query"], "docs": []}
-        
+
         return RunnableSequence([process_input])
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the writing assistant answering chain."""
-        chain = LLMChain(
-            llm=self.llm,
-            prompt=ChatPromptTemplate.from_messages([
-                ("system", WRITING_ASSISTANT_PROMPT),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{query}")
-            ])
-        )
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", WRITING_ASSISTANT_PROMPT),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{query}")
+        ])
+
+        chain = prompt | self.llm
         str_parser = StrOutputParser()
-        
+
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate a response to the user's writing-related query."""
             try:
-                response = await chain.arun(
-                    query=input_data["query"],
-                    chat_history=input_data["chat_history"]
-                )
-                
+                response = await chain.invoke({
+                    "query": input_data["query"],
+                    "chat_history": input_data["chat_history"]
+                })
+
                 return {
                     "type": "response",
-                    "data": str_parser.parse(response)
+                    "data": str_parser.parse(response.content)
                 }
             except Exception as e:
-                logger.error(f"Error in writing assistant chain: {str(e)}")
+                logger.error("Error in writing assistant chain: %s", str(e))
                 return {
                     "type": "error",
                     "data": "An error occurred while processing your writing request"
                 }
-        
+
         return RunnableSequence([generate_response])
 
     def format_prompt(self, query: str, context: str) -> str:

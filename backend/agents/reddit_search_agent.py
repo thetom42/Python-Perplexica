@@ -11,12 +11,12 @@ from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
-from langchain.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableSequence, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 from backend.lib.searxng import search_searxng
 from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
+from backend.agents.abstract_agent import AbstractAgent
 
 BASIC_REDDIT_SEARCH_RETRIEVER_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question if needed so it is a standalone question that can be used by the LLM to search the web for information.
@@ -44,34 +44,22 @@ class RedditSearchAgent(AbstractAgent):
 
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the Reddit search retriever chain."""
-        chain = LLMChain(
-            llm=self.llm,
-            prompt=PromptTemplate.from_template(BASIC_REDDIT_SEARCH_RETRIEVER_PROMPT)
-        )
+        prompt = PromptTemplate.from_template(BASIC_REDDIT_SEARCH_RETRIEVER_PROMPT)
         str_parser = StrOutputParser()
-        
-        async def process_input(input_data: Dict[str, Any]) -> str:
-            """Process the input through the LLM chain."""
-            try:
-                return await chain.arun(
-                    chat_history=input_data["chat_history"],
-                    query=input_data["query"]
-                )
-            except Exception as e:
-                logger.error(f"Error in LLM processing: {str(e)}")
-                return input_data["query"]
-        
-        async def process_output(input: str) -> Dict[str, Any]:
+
+        chain = prompt | self.llm | str_parser
+
+        async def process_output(query_text: str) -> Dict[str, Any]:
             """Process the LLM output and perform the Reddit search."""
-            if input.strip() == "not_needed":
+            if query_text.strip() == "not_needed":
                 return {"query": "", "docs": []}
-                
+
             try:
-                res = await search_searxng(input, {
+                res = await search_searxng(query_text, {
                     "language": "en",
                     "engines": ["reddit"]
                 })
-                
+
                 documents = [
                     Document(
                         page_content=result.get("content", result["title"]),
@@ -83,18 +71,26 @@ class RedditSearchAgent(AbstractAgent):
                     )
                     for result in res["results"]
                 ]
-                
-                return {"query": input, "docs": documents}
+
+                return {"query": query_text, "docs": documents}
             except Exception as e:
-                logger.error(f"Error in Reddit search: {str(e)}")
-                return {"query": input, "docs": []}
-        
-        return RunnableSequence([process_input, str_parser.parse, process_output])
+                logger.error("Error in Reddit search: %s", str(e))
+                return {"query": query_text, "docs": []}
+
+        retriever_chain = RunnableSequence([
+            {
+                "rephrased_query": chain,
+                "original_input": RunnablePassthrough()
+            },
+            lambda x: process_output(x["rephrased_query"])
+        ])
+
+        return retriever_chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the Reddit search answering chain."""
         retriever_chain = await self.create_retriever_chain()
-        
+
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate the final response using the retriever chain and response chain."""
             try:
@@ -102,29 +98,28 @@ class RedditSearchAgent(AbstractAgent):
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
-                
+
                 if not retriever_result["query"]:
                     return {
                         "type": "response",
                         "data": "I'm not sure how to help with that. Could you please ask a specific question?"
                     }
-                
+
                 reranked_docs = await self.rerank_docs(retriever_result["query"], retriever_result["docs"])
                 context = await self.process_docs(reranked_docs)
-                
-                response_chain = LLMChain(
-                    llm=self.llm,
-                    prompt=ChatPromptTemplate.from_messages([
-                        ("system", self.format_prompt(input_data["query"], context)),
-                        ("human", "{query}")
-                    ])
-                )
-                
-                response = await response_chain.arun(query=input_data["query"])
-                
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", self.format_prompt(input_data["query"], context)),
+                    ("human", "{query}")
+                ])
+
+                response_chain = prompt | self.llm
+
+                response = await response_chain.invoke({"query": input_data["query"]})
+
                 return {
                     "type": "response",
-                    "data": response,
+                    "data": response.content,
                     "sources": [
                         {
                             "title": doc.metadata.get("title", ""),
@@ -135,12 +130,12 @@ class RedditSearchAgent(AbstractAgent):
                     ]
                 }
             except Exception as e:
-                logger.error(f"Error in response generation: {str(e)}")
+                logger.error("Error in response generation: %s", str(e))
                 return {
                     "type": "error",
                     "data": "An error occurred while processing Reddit search results"
                 }
-        
+
         return RunnableSequence([generate_response])
 
     def format_prompt(self, query: str, context: str) -> str:
