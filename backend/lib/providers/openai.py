@@ -54,7 +54,7 @@ async def load_openai_chat_models():
 
         return chat_models
     except Exception as err:
-        logger.error(f"Error loading OpenAI models: {err}")
+        logger.error("Error loading OpenAI models: %s", err)
         return {}
 
 async def load_openai_embeddings_models():
@@ -82,5 +82,5 @@ async def load_openai_embeddings_models():
 
         return embedding_models
     except Exception as err:
-        logger.error(f"Error loading OpenAI embeddings model: {err}")
+        logger.error("Error loading OpenAI embeddings model: %s", err)
         return {}

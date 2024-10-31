@@ -28,7 +28,7 @@ async def load_ollama_chat_models():
 
         return chat_models
     except Exception as err:
-        logger.error(f"Error loading Ollama models: {err}")
+        logger.error("Error loading Ollama models: %s", err)
         return {}
 
 async def load_ollama_embeddings_models():
@@ -54,5 +54,5 @@ async def load_ollama_embeddings_models():
 
         return embeddings_models
     except Exception as err:
-        logger.error(f"Error loading Ollama embeddings models: {err}")
+        logger.error("Error loading Ollama embeddings models: %s", err)
         return {}

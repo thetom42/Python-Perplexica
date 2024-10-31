@@ -45,5 +45,5 @@ async def load_anthropic_chat_models():
 
         return chat_models
     except Exception as err:
-        logger.error(f"Error loading Anthropic models: {err}")
+        logger.error("Error loading Anthropic models: %s", err)
         return {}

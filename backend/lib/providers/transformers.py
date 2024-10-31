@@ -26,5 +26,5 @@ async def load_transformers_embeddings_models():
 
         return embedding_models
     except Exception as err:
-        logger.error(f"Error loading Transformers embeddings model: {err}")
+        logger.error("Error loading Transformers embeddings model: %s", err)
         return {}

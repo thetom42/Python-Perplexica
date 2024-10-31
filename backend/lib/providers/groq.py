@@ -103,5 +103,5 @@ async def load_groq_chat_models():
 
         return chat_models
     except Exception as err:
-        logger.error(f"Error loading Groq models: {err}")
+        logger.error("Error loading Groq models: %s", err)
         return {}

@@ -28,3 +28,4 @@ locust==2.21.0
 types-toml==0.10.8.7
 pylint==3.0.3
 mypy==1.8.0
+sqlalchemy2-stubs==0.0.2a38
