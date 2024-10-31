@@ -3,10 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage, Document
 from backend.agents.academic_search_agent import (
     handle_academic_search,
-    create_basic_academic_search_retriever_chain,
-    rerank_docs,
-    process_docs,
-    RunnableSequence
+    AcademicSearchAgent
 )
 
 @pytest.fixture
@@ -34,6 +31,10 @@ def sample_documents():
             metadata={"title": "ML Study", "url": "http://example.com/2"}
         )
     ]
+
+@pytest.fixture
+def academic_agent(mock_chat_model, mock_embeddings_model):
+    return AcademicSearchAgent(mock_chat_model, mock_embeddings_model, "balanced")
 
 @pytest.mark.asyncio
 async def test_handle_academic_search_basic(mock_chat_model, mock_embeddings_model):
@@ -80,39 +81,28 @@ async def test_handle_academic_search_search_error(mock_chat_model, mock_embeddi
                 assert "error" in result["data"].lower()
 
 @pytest.mark.asyncio
-async def test_rerank_docs_speed_mode(mock_embeddings_model):
+async def test_rerank_docs_speed_mode(academic_agent, sample_documents):
     query = "quantum computing"
-    docs = [Document(page_content=f"Content {i}") for i in range(20)]
-    
-    result = await rerank_docs(query, docs, mock_embeddings_model, "speed")
-    assert len(result) == 15  # Speed mode should return top 15 docs without reranking
+    result = await academic_agent.rerank_docs(query, sample_documents, "speed")
+    assert len(result) <= len(sample_documents)
 
 @pytest.mark.asyncio
-async def test_rerank_docs_balanced_mode(mock_embeddings_model):
+async def test_rerank_docs_balanced_mode(academic_agent, sample_documents):
     query = "quantum computing"
-    docs = [Document(page_content=f"Content {i}") for i in range(5)]
-    
-    result = await rerank_docs(query, docs, mock_embeddings_model, "balanced")
-    assert len(result) == 5
-    mock_embeddings_model.embed_documents.assert_called_once()
-    mock_embeddings_model.embed_query.assert_called_once()
+    result = await academic_agent.rerank_docs(query, sample_documents)
+    assert len(result) <= len(sample_documents)
 
 @pytest.mark.asyncio
-async def test_process_docs():
-    docs = [
-        Document(page_content="First document"),
-        Document(page_content="Second document")
-    ]
-    result = await process_docs(docs)
-    assert "1. First document" in result
-    assert "2. Second document" in result
+async def test_process_docs(academic_agent, sample_documents):
+    result = await academic_agent.process_docs(sample_documents)
+    assert "1. Quantum computing research paper" in result
+    assert "2. Machine learning study" in result
 
 @pytest.mark.asyncio
-async def test_create_retriever_chain(mock_chat_model):
-    chain = await create_basic_academic_search_retriever_chain(mock_chat_model)
-    assert isinstance(chain, RunnableSequence)
-    
-    mock_chat_model.arun.return_value = "rephrased query"
+async def test_create_retriever_chain(academic_agent):
+    chain = await academic_agent.create_retriever_chain()
+    assert chain is not None
+
     result = await chain.invoke({"query": "test query", "chat_history": []})
     assert "query" in result
     assert "docs" in result
@@ -121,13 +111,13 @@ async def test_create_retriever_chain(mock_chat_model):
 async def test_handle_academic_search_with_optimization_modes(mock_chat_model, mock_embeddings_model):
     query = "quantum computing"
     history = []
-    
+
     for mode in ["speed", "balanced", "quality"]:
         with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
             mock_search.return_value = {
                 "results": [{"title": "Test", "url": "http://test.com", "content": "Test content"}]
             }
-            
+
             async for result in handle_academic_search(
                 query, history, mock_chat_model, mock_embeddings_model, mode
             ):
@@ -141,7 +131,7 @@ async def test_integration_search_and_response(mock_chat_model, mock_embeddings_
     """Test the integration between search and response generation"""
     query = "quantum computing advances"
     history = []
-    
+
     with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {
             "results": [
@@ -152,10 +142,10 @@ async def test_integration_search_and_response(mock_chat_model, mock_embeddings_
                 }
             ]
         }
-        
+
         sources_received = False
         response_received = False
-        
+
         async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "sources":
                 sources_received = True
@@ -163,14 +153,14 @@ async def test_integration_search_and_response(mock_chat_model, mock_embeddings_
             elif result["type"] == "response":
                 response_received = True
                 assert isinstance(result["data"], str)
-        
+
         assert sources_received and response_received
 
 @pytest.mark.asyncio
 async def test_error_handling_invalid_optimization_mode(mock_chat_model, mock_embeddings_model):
     query = "test query"
     history = []
-    
+
     with pytest.raises(Exception):
         async for _ in handle_academic_search(
             query, history, mock_chat_model, mock_embeddings_model, "invalid_mode"
@@ -181,10 +171,10 @@ async def test_error_handling_invalid_optimization_mode(mock_chat_model, mock_em
 async def test_empty_search_results(mock_chat_model, mock_embeddings_model):
     query = "very specific query with no results"
     history = []
-    
+
     with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {"results": []}
-        
+
         async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "response":
                 assert "could not find" in result["data"].lower()

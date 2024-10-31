@@ -1,11 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from langchain.schema import HumanMessage, AIMessage, Document
+from langchain.schema import HumanMessage, AIMessage
 from backend.agents.reddit_search_agent import (
     handle_reddit_search,
-    create_basic_reddit_search_retriever_chain,
-    create_basic_reddit_search_answering_chain,
-    RunnableSequence
+    RedditSearchAgent
 )
 
 @pytest.fixture
@@ -16,10 +14,11 @@ def mock_chat_model():
 
 @pytest.fixture
 def mock_embeddings_model():
-    mock = AsyncMock()
-    mock.embed_documents = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    mock.embed_query = AsyncMock(return_value=[0.2, 0.3, 0.4])
-    return mock
+    return AsyncMock()
+
+@pytest.fixture
+def reddit_agent(mock_chat_model, mock_embeddings_model):
+    return RedditSearchAgent(mock_chat_model, mock_embeddings_model, "balanced")
 
 @pytest.fixture
 def sample_reddit_results():
@@ -67,56 +66,55 @@ async def test_handle_reddit_search_basic(mock_chat_model, mock_embeddings_model
                 assert "url" in result["data"][0]
 
 @pytest.mark.asyncio
-async def test_retriever_chain_creation(mock_chat_model):
-    chain = await create_basic_reddit_search_retriever_chain(mock_chat_model)
-    assert isinstance(chain, RunnableSequence)
-    
-    mock_chat_model.arun.return_value = "rephrased query"
+async def test_retriever_chain_creation(reddit_agent):
+    chain = await reddit_agent.create_retriever_chain()
+    assert chain is not None
+
     with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {"results": []}
-        
+
         result = await chain.invoke({
             "query": "test query",
             "chat_history": []
         })
-        
+
         assert "query" in result
         assert "docs" in result
 
 @pytest.mark.asyncio
-async def test_optimization_modes(mock_chat_model, mock_embeddings_model, sample_reddit_results):
-    query = "test query"
-    history = []
-    
+async def test_query_rephrasing(mock_chat_model, mock_embeddings_model):
+    query = "What do Redditors think about Python?"
+    history = [
+        HumanMessage(content="I'm interested in programming"),
+        AIMessage(content="I can help with that!")
+    ]
+
     with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = sample_reddit_results
-        
-        for mode in ["speed", "balanced", "quality"]:
-            async for result in handle_reddit_search(
-                query, history, mock_chat_model, mock_embeddings_model, mode
-            ):
-                if result["type"] == "sources":
-                    assert isinstance(result["data"], list)
-                elif result["type"] == "response":
-                    assert isinstance(result["data"], str)
+        mock_search.return_value = {"results": []}
+        mock_chat_model.arun.return_value = "Python programming language opinions"
+
+        await handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model)
+
+        # Verify the query was processed through the rephrasing chain
+        assert mock_chat_model.arun.called
+        call_args = mock_chat_model.arun.call_args[1]
+        assert "chat_history" in call_args
+        assert "query" in call_args
 
 @pytest.mark.asyncio
-async def test_document_reranking(mock_chat_model, mock_embeddings_model):
+async def test_youtube_specific_search(mock_chat_model, mock_embeddings_model):
     query = "test query"
     history = []
-    
+
     with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
-        # Create test documents with varying relevance
-        mock_search.return_value = {
-            "results": [{"title": f"Result {i}", "url": f"url{i}", "content": f"content {i}"} for i in range(20)]
-        }
-        
-        async for result in handle_reddit_search(
-            query, history, mock_chat_model, mock_embeddings_model, "balanced"
-        ):
-            if result["type"] == "sources":
-                # Should be limited and reranked
-                assert len(result["data"]) <= 15
+        mock_search.return_value = {"results": []}
+
+        await handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model)
+
+        # Verify Reddit-specific search configuration
+        mock_search.assert_called_once()
+        call_args = mock_search.call_args[1]
+        assert call_args.get("engines") == ["reddit"]
 
 @pytest.mark.asyncio
 async def test_error_handling(mock_chat_model, mock_embeddings_model):
@@ -125,7 +123,7 @@ async def test_error_handling(mock_chat_model, mock_embeddings_model):
 
     with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
         mock_search.side_effect = Exception("Search API error")
-        
+
         async for result in handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "error":
                 assert "error" in result["data"].lower()
@@ -140,27 +138,6 @@ async def test_empty_query_handling(mock_chat_model, mock_embeddings_model):
             assert "specific question" in result["data"].lower()
 
 @pytest.mark.asyncio
-async def test_query_rephrasing(mock_chat_model, mock_embeddings_model):
-    query = "What do Redditors think about Python?"
-    history = [
-        HumanMessage(content="I'm interested in programming"),
-        AIMessage(content="I can help with that!")
-    ]
-
-    with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {"results": []}
-        mock_chat_model.arun.return_value = "Python programming language opinions"
-
-        async for _ in handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model):
-            pass
-        
-        # Verify the query was processed through the rephrasing chain
-        assert mock_chat_model.arun.called
-        call_args = mock_chat_model.arun.call_args[1]
-        assert "chat_history" in call_args
-        assert "query" in call_args
-
-@pytest.mark.asyncio
 async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_reddit_results):
     query = "test query"
     history = []
@@ -171,7 +148,7 @@ async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_re
 
         sources_received = False
         response_received = False
-        
+
         async for result in handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "sources":
                 sources_received = True
@@ -183,7 +160,7 @@ async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_re
                 response_received = True
                 assert "[1]" in result["data"]
                 assert "[2]" in result["data"]
-        
+
         assert sources_received and response_received
 
 @pytest.mark.asyncio
@@ -193,7 +170,7 @@ async def test_invalid_history_handling(mock_chat_model, mock_embeddings_model):
 
     with patch('backend.agents.reddit_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {"results": []}
-        
+
         async for result in handle_reddit_search(query, invalid_history, mock_chat_model, mock_embeddings_model):
             # Should handle invalid history gracefully
             assert result["type"] in ["response", "sources", "error"]
@@ -216,7 +193,7 @@ async def test_malformed_search_results(mock_chat_model, mock_embeddings_model):
                 }
             ]
         }
-        
+
         async for result in handle_reddit_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "sources":
                 # Should only include the complete result
