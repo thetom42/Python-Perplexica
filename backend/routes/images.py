@@ -1,55 +1,36 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-from backend.agents.image_search_agent import handle_image_search
-from backend.lib.providers import get_available_chat_model_providers
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException
 from langchain.schema import HumanMessage, AIMessage
-from backend.utils.logger import logger
-from langchain.embeddings import OpenAIEmbeddings  # Add this import
+from agents.image_search_agent import handle_image_search
+from routes.models import ImageSearchRequest, ImageResult, StreamResponse
+from routes.config import get_chat_model, get_embeddings_model
+from utils.logger import logger
 
 router = APIRouter()
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ImageSearchRequest(BaseModel):
-    query: str
-    chat_history: List[ChatMessage]
-    chat_model_provider: Optional[str] = None
-    chat_model: Optional[str] = None
-
-@router.post("/")
-async def image_search(request: ImageSearchRequest) -> Dict[str, List[Dict[str, Any]]]:
+@router.post("/search", response_model=List[StreamResponse])
+async def search_images(
+    request: ImageSearchRequest,
+    chat_model=Depends(get_chat_model),
+    embeddings_model=Depends(get_embeddings_model)
+):
+    """Search for images based on the given query."""
     try:
-        chat_history = [
-            HumanMessage(content=msg.content) if msg.role == 'user' else AIMessage(content=msg.content)
-            for msg in request.chat_history
+        history = [
+            HumanMessage(content=msg.content) if msg.role == "user"
+            else AIMessage(content=msg.content)
+            for msg in request.history
         ]
-
-        chat_models = await get_available_chat_model_providers()
-        provider = request.chat_model_provider or next(iter(chat_models))
-        chat_model = request.chat_model or next(iter(chat_models[provider]))
-
-        llm = None
-        if provider in chat_models and chat_model in chat_models[provider]:
-            llm = chat_models[provider][chat_model].model
-
-        if not llm:
-            raise HTTPException(status_code=500, detail="Invalid LLM model selected")
-
-        embeddings = OpenAIEmbeddings()
-        images = await handle_image_search(
-            query=request.query,
-            history=chat_history,
-            llm=llm,
-            embeddings=embeddings,
-            optimization_mode="balanced"
-        )
-
-        return {"images": images}
-    except HTTPException:
-        raise
+        responses = []
+        async for response in handle_image_search(
+            request.query,
+            history,
+            chat_model,
+            embeddings_model,
+            request.mode
+        ):
+            responses.append(response)
+        return responses
     except Exception as e:
         logger.error("Error in image search: %s", str(e))
-        raise HTTPException(status_code=500, detail="An error has occurred.") from e
+        raise HTTPException(status_code=500, detail=str(e)) from e

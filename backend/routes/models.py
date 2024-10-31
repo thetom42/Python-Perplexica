@@ -1,29 +1,33 @@
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any
-from backend.lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
-from backend.utils.logger import logger
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional, Literal
 
-router = APIRouter()
+class ChatMessage(BaseModel):
+    role: str
+    content: str
 
-@router.get("/")
-async def get_models() -> Dict[str, Any]:
-    try:
-        chat_model_providers = await get_available_chat_model_providers()
-        embedding_model_providers = await get_available_embedding_model_providers()
+class ImageSearchRequest(BaseModel):
+    query: str
+    history: List[ChatMessage]
+    mode: Literal["speed", "balanced", "quality"] = "balanced"
 
-        # Remove the 'model' field from each provider's model information
-        for provider in chat_model_providers.values():
-            for model_info in provider.values():
-                model_info.pop('model', None)
+class ImageResult(BaseModel):
+    url: str
+    title: str
+    source: Optional[str] = None
 
-        for provider in embedding_model_providers.values():
-            for model_info in provider.values():
-                model_info.pop('model', None)
+class StreamResponse(BaseModel):
+    type: str
+    data: Any
 
-        return {
-            "chatModelProviders": chat_model_providers,
-            "embeddingModelProviders": embedding_model_providers
-        }
-    except Exception as e:
-        logger.error("Error in getting models: %s", str(e))
-        raise HTTPException(status_code=500, detail="An error has occurred.") from e
+class SearchRequest(BaseModel):
+    query: str
+    history: List[ChatMessage]
+    mode: Literal["speed", "balanced", "quality"] = "balanced"
+
+class ModelInfo(BaseModel):
+    name: str
+    displayName: str
+
+class ModelsResponse(BaseModel):
+    chatModelProviders: Dict[str, List[ModelInfo]]
+    embeddingModelProviders: Dict[str, List[ModelInfo]]

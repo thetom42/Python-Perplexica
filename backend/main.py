@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
+
 from config import get_port, get_cors_origins
 from routes import router
 from websocket.websocket_server import init_websocket
