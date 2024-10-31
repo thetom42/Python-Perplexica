@@ -25,5 +25,5 @@ async def get_models() -> Dict[str, Any]:
             "embeddingModelProviders": embedding_model_providers
         }
     except Exception as e:
-        logger.error(f"Error in getting models: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in getting models: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e

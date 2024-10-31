@@ -5,9 +5,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.chat_models.base import BaseChatModel
 from langchain.embeddings.base import Embeddings
-from langchain.chat_models import ChatOpenAI
+from langchain.chat_models.openai import ChatOpenAI  # Fixed import
 from backend.lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
-from backend.websocket.message_handler import search_handlers
+from backend.websocket.message_handler import search_handlers  # This will be fixed in message_handler.py
 from backend.utils.logger import logger
 import json
 
@@ -95,5 +95,5 @@ async def search(body: ChatRequestBody):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     except Exception as e:
-        logger.error(f"Error in getting search results: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in getting search results: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e

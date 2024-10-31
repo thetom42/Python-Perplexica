@@ -13,6 +13,20 @@ from backend.agents import (
 )
 from backend.lib.providers import get_chat_model, get_embeddings_model
 
+#__all__ = ['search_handlers', 'handle_message', 'convert_to_base_message']
+
+# Map focus modes to their respective handler functions
+search_handlers = {
+    "web": handle_web_search,
+    "academic": handle_academic_search,
+    "image": handle_image_search,
+    "reddit": handle_reddit_search,
+    "video": handle_video_search,
+    "wolfram_alpha": handle_wolfram_alpha_search,
+    "writing": handle_writing_assistance,
+    "youtube": handle_youtube_search,
+}
+
 async def handle_message(websocket: WebSocket, message: str):
     try:
         data = json.loads(message)

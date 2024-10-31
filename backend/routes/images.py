@@ -5,6 +5,7 @@ from backend.agents.image_search_agent import handle_image_search
 from backend.lib.providers import get_available_chat_model_providers
 from langchain.schema import HumanMessage, AIMessage
 from backend.utils.logger import logger
+from langchain.embeddings import OpenAIEmbeddings  # Add this import
 
 router = APIRouter()
 
@@ -37,11 +38,18 @@ async def image_search(request: ImageSearchRequest) -> Dict[str, List[Dict[str, 
         if not llm:
             raise HTTPException(status_code=500, detail="Invalid LLM model selected")
 
-        images = await handle_image_search({"query": request.query, "chat_history": chat_history}, llm)
+        embeddings = OpenAIEmbeddings()
+        images = await handle_image_search(
+            query=request.query,
+            history=chat_history,
+            llm=llm,
+            embeddings=embeddings,
+            optimization_mode="balanced"
+        )
 
         return {"images": images}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in image search: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in image search: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e

@@ -43,8 +43,8 @@ async def get_config() -> Dict[str, Any]:
 
         return config
     except Exception as e:
-        logger.error(f"Error getting config: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error getting config: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e
 
 @router.post("/")
 async def update_config_route(config: ConfigUpdate) -> Dict[str, str]:
@@ -63,5 +63,5 @@ async def update_config_route(config: ConfigUpdate) -> Dict[str, str]:
         update_config(updated_config)
         return {"message": "Config updated"}
     except Exception as e:
-        logger.error(f"Error updating config: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error updating config: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e

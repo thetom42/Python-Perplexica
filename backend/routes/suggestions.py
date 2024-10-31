@@ -5,6 +5,7 @@ from langchain.schema import HumanMessage, AIMessage
 from backend.agents.suggestion_generator_agent import generate_suggestions
 from backend.lib.providers import get_available_chat_model_providers
 from backend.utils.logger import logger
+from langchain.embeddings import OpenAIEmbeddings
 
 router = APIRouter()
 
@@ -36,11 +37,17 @@ async def generate_suggestions_route(request: SuggestionRequest) -> Dict[str, Li
         if not llm:
             raise HTTPException(status_code=500, detail="Invalid LLM model selected")
 
-        suggestions = await generate_suggestions({"chat_history": chat_history}, llm)
+        embeddings = OpenAIEmbeddings()
+        suggestions = await generate_suggestions(
+            history=chat_history,
+            llm=llm,
+            embeddings=embeddings,
+            optimization_mode="balanced"
+        )
 
         return {"suggestions": suggestions}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in generating suggestions: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in generating suggestions: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e

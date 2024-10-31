@@ -13,8 +13,8 @@ async def get_chats(db: Session = Depends(get_db)) -> Dict[str, List[Dict[str, A
         chats = db.query(Chat).order_by(Chat.created_at.desc()).all()
         return {"chats": [chat.to_dict() for chat in chats]}
     except Exception as e:
-        logger.error(f"Error in getting chats: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in getting chats: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e
 
 @router.get("/{chat_id}")
 async def get_chat(chat_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
@@ -22,14 +22,14 @@ async def get_chat(chat_id: str, db: Session = Depends(get_db)) -> Dict[str, Any
         chat = db.query(Chat).filter(Chat.id == chat_id).first()
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
-        
+
         chat_messages = db.query(Message).filter(Message.chat_id == chat_id).order_by(Message.created_at).all()
         return {"chat": chat.to_dict(), "messages": [message.to_dict() for message in chat_messages]}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in getting chat: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in getting chat: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e
 
 @router.delete("/{chat_id}")
 async def delete_chat(chat_id: str, db: Session = Depends(get_db)) -> Dict[str, str]:
@@ -37,7 +37,7 @@ async def delete_chat(chat_id: str, db: Session = Depends(get_db)) -> Dict[str, 
         chat = db.query(Chat).filter(Chat.id == chat_id).first()
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
-        
+
         db.query(Message).filter(Message.chat_id == chat_id).delete()
         db.delete(chat)
         db.commit()
@@ -45,8 +45,8 @@ async def delete_chat(chat_id: str, db: Session = Depends(get_db)) -> Dict[str, 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in deleting chat: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in deleting chat: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e
 
 # Note: The create_chat, update_chat, create_message, and get_chat_messages endpoints
 # were not present in the original TypeScript implementation, so they have been removed.

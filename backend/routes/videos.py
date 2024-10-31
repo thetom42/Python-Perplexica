@@ -5,6 +5,7 @@ from langchain.schema import HumanMessage, AIMessage
 from backend.agents.video_search_agent import handle_video_search
 from backend.lib.providers import get_available_chat_model_providers
 from backend.utils.logger import logger
+from langchain.embeddings import OpenAIEmbeddings  # Add this import
 
 router = APIRouter()
 
@@ -37,11 +38,18 @@ async def video_search(request: VideoSearchRequest) -> Dict[str, List[Dict[str, 
         if not llm:
             raise HTTPException(status_code=500, detail="Invalid LLM model selected")
 
-        videos = await handle_video_search({"chat_history": chat_history, "query": request.query}, llm)
+        embeddings = OpenAIEmbeddings()
+        videos = await handle_video_search(
+            query=request.query,
+            history=chat_history,
+            llm=llm,
+            embeddings=embeddings,
+            optimization_mode="balanced"
+        )
 
         return {"videos": videos}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in video search: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error has occurred.")
+        logger.error("Error in video search: %s", str(e))
+        raise HTTPException(status_code=500, detail="An error has occurred.") from e
