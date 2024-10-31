@@ -2,107 +2,256 @@
 Web Search Agent Module
 
 This module provides functionality for performing web searches, rephrasing queries,
-and generating responses based on search results or webpage content. It uses the SearxNG
-search engine and a language model to process and summarize information.
+and generating responses based on search results or webpage content. It includes
+specialized handling for webpage summarization and link-based content retrieval.
 """
 
-from langchain.schema import BaseMessage
-from langchain.prompts import PromptTemplate, ChatPromptTemplate
-from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+from datetime import datetime
+from typing import List, Dict, Any, Literal, AsyncGenerator
+from langchain.schema import BaseMessage, Document
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
-from langchain.embeddings.base import Embeddings
-from langchain.chat_models.base import BaseChatModel
+from langchain.prompts import ChatPromptTemplate, PromptTemplate, MessagesPlaceholder
 from backend.lib.searxng import search_searxng
-from backend.utils.compute_similarity import compute_similarity
-from backend.utils.format_history import format_chat_history_as_string
 from backend.lib.link_document import get_documents_from_links
 from backend.utils.logger import logger
-from backend.utils.cache import cache_result
-from typing import List, Dict, Any
+from backend.lib.output_parsers.line_output_parser import LineOutputParser
+from backend.lib.output_parsers.list_line_output_parser import LineListOutputParser
+from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
 
-@cache_result(expire_time=3600)  # Cache results for 1 hour
-async def handle_web_search(query: str, history: List[BaseMessage], llm: BaseChatModel, embeddings: Embeddings) -> Dict[str, Any]:
+BASIC_SEARCH_RETRIEVER_PROMPT = """
+You are an AI question rephraser. You will be given a conversation and a follow-up question,  you will have to rephrase the follow up question so it is a standalone question and can be used by another LLM to search the web for information to answer it.
+If it is a smple writing task or a greeting (unless the greeting contains a question after it) like Hi, Hello, How are you, etc. than a question then you need to return `not_needed` as the response (This is because the LLM won't need to search the web for finding information on this topic).
+If the user asks some question from some URL or wants you to summarize a PDF or a webpage (via URL) you need to return the links inside the `links` XML block and the question inside the `question` XML block. If the user wants to you to summarize the webpage or the PDF you need to return `summarize` inside the `question` XML block in place of a question and the link to summarize in the `links` XML block.
+
+<conversation>
+{chat_history}
+</conversation>
+
+Follow up question: {query}
+Rephrased question:
+"""
+
+class WebSearchAgent(AbstractAgent):
+    """Agent for performing web searches and generating responses."""
+
+    async def create_retriever_chain(self) -> RunnableSequence:
+        """Create the web search retriever chain."""
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate.from_template(BASIC_SEARCH_RETRIEVER_PROMPT)
+        )
+        
+        async def process_input(input_data: Dict[str, Any]) -> str:
+            """Process the input through the LLM chain."""
+            try:
+                return await chain.arun(
+                    chat_history=input_data["chat_history"],
+                    query=input_data["query"]
+                )
+            except Exception as e:
+                logger.error(f"Error in LLM processing: {str(e)}")
+                return "<question>not_needed</question>"
+        
+        async def process_output(input: str) -> Dict[str, Any]:
+            """Process the LLM output and perform the web search."""
+            try:
+                links_parser = LineListOutputParser(key="links")
+                question_parser = LineOutputParser(key="question")
+                
+                links = await links_parser.parse(input)
+                question = await question_parser.parse(input)
+                
+                if question == "not_needed":
+                    return {"query": "", "docs": []}
+                    
+                if links:
+                    if not question:
+                        question = "summarize"
+                        
+                    docs = []
+                    link_docs = await get_documents_from_links({"links": links})
+                    doc_groups = []
+                    
+                    for doc in link_docs:
+                        url_doc = next(
+                            (d for d in doc_groups if d.metadata["url"] == doc.metadata["url"] and d.metadata.get("totalDocs", 0) < 10),
+                            None
+                        )
+                        
+                        if not url_doc:
+                            doc.metadata["totalDocs"] = 1
+                            doc_groups.append(doc)
+                        else:
+                            url_doc.page_content += f"\n\n{doc.page_content}"
+                            url_doc.metadata["totalDocs"] = url_doc.metadata.get("totalDocs", 0) + 1
+                    
+                    for doc in doc_groups:
+                        try:
+                            summary = await self.llm.agenerate([[
+                                ("system", """
+                                You are a web search summarizer, tasked with summarizing a piece of text retrieved from a web search. Your job is to summarize the 
+                                text into a detailed, 2-4 paragraph explanation that captures the main ideas and provides a comprehensive answer to the query.
+                                If the query is "summarize", you should provide a detailed summary of the text. If the query is a specific question, you should answer it in the summary.
+                                
+                                - **Journalistic tone**: The summary should sound professional and journalistic, not too casual or vague.
+                                - **Thorough and detailed**: Ensure that every key point from the text is captured and that the summary directly answers the query.
+                                - **Not too lengthy, but detailed**: The summary should be informative but not excessively long. Focus on providing detailed information in a concise format.
+                                """),
+                                ("human", f"""
+                                <query>
+                                {question}
+                                </query>
+
+                                <text>
+                                {doc.page_content}
+                                </text>
+
+                                Make sure to answer the query in the summary.
+                                """)
+                            ]])
+                            
+                            docs.append(Document(
+                                page_content=summary.generations[0][0].text,
+                                metadata={
+                                    "title": doc.metadata["title"],
+                                    "url": doc.metadata["url"]
+                                }
+                            ))
+                        except Exception as e:
+                            logger.error(f"Error summarizing document: {str(e)}")
+                            docs.append(doc)
+                    
+                    return {"query": question, "docs": docs}
+                else:
+                    res = await search_searxng(question, {
+                        "language": "en"
+                    })
+                    
+                    documents = [
+                        Document(
+                            page_content=result["content"],
+                            metadata={
+                                "title": result["title"],
+                                "url": result["url"],
+                                **({"img_src": result["img_src"]} if "img_src" in result else {})
+                            }
+                        )
+                        for result in res["results"]
+                    ]
+                    
+                    return {"query": question, "docs": documents}
+            except Exception as e:
+                logger.error(f"Error in web search/processing: {str(e)}")
+                return {"query": "", "docs": []}
+        
+        return RunnableSequence([process_input, process_output])
+
+    async def create_answering_chain(self) -> RunnableSequence:
+        """Create the web search answering chain."""
+        retriever_chain = await self.create_retriever_chain()
+        
+        async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate the final response using the retriever chain and response chain."""
+            try:
+                retriever_result = await retriever_chain.invoke({
+                    "query": input_data["query"],
+                    "chat_history": input_data["chat_history"]
+                })
+                
+                if not retriever_result["query"]:
+                    return {
+                        "type": "response",
+                        "data": "I'm not sure how to help with that. Could you please ask a specific question?"
+                    }
+                
+                reranked_docs = await self.rerank_docs(retriever_result["query"], retriever_result["docs"])
+                context = await self.process_docs(reranked_docs)
+                
+                response_chain = LLMChain(
+                    llm=self.llm,
+                    prompt=ChatPromptTemplate.from_messages([
+                        ("system", self.format_prompt(input_data["query"], context)),
+                        MessagesPlaceholder(variable_name="chat_history"),
+                        ("human", "{query}")
+                    ])
+                )
+                
+                response = await response_chain.arun(
+                    query=input_data["query"],
+                    chat_history=input_data["chat_history"],
+                    context=context
+                )
+                
+                return {
+                    "type": "response",
+                    "data": response,
+                    "sources": [
+                        {
+                            "title": doc.metadata.get("title", ""),
+                            "url": doc.metadata.get("url", ""),
+                            "img_src": doc.metadata.get("img_src")
+                        }
+                        for doc in reranked_docs
+                    ]
+                }
+            except Exception as e:
+                logger.error(f"Error in response generation: {str(e)}")
+                return {
+                    "type": "error",
+                    "data": "An error occurred while processing the web search results"
+                }
+        
+        return RunnableSequence([generate_response])
+
+    def format_prompt(self, query: str, context: str) -> str:
+        """Format the prompt for the language model."""
+        return f"""
+        You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are also an expert at summarizing web pages or documents and searching for content in them.
+
+        Generate a response that is informative and relevant to the user's query based on provided context (the context consits of search results containing a brief description of the content of that page).
+        You must use this context to answer the user's query in the best way possible. Use an unbaised and journalistic tone in your response. Do not repeat the text.
+        You must not tell the user to open any link or visit any website to get the answer. You must provide the answer in the response itself. If the user asks for links you can provide them.
+        Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
+        You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
+        Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
+
+        <context>
+        {context}
+        </context>
+
+        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
+        Anything between the `context` is retrieved from a search engine and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
+        """
+
+    async def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse the response from the language model."""
+        return {
+            "type": "response",
+            "data": response
+        }
+
+async def handle_web_search(
+    query: str,
+    history: List[BaseMessage],
+    llm: BaseChatModel,
+    embeddings: Embeddings,
+    optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Handle a web search query, rephrase it if necessary, perform the search or fetch webpage content,
-    and generate a response based on the results.
-
-    This function performs the following steps:
-    1. Rephrase the query to make it standalone or identify if it's a URL summarization request.
-    2. Perform a web search using SearxNG or fetch webpage content if a URL is provided.
-    3. Generate a response using a language model based on the search results or webpage content.
+    Handle a web search query and generate streaming responses.
 
     Args:
-        query (str): The user's search query.
-        history (List[BaseMessage]): The chat history.
-        llm (BaseChatModel): The language model to use for generating responses.
-        embeddings (Embeddings): The embeddings model (not used in the current implementation).
+        query: The web search query
+        history: The chat history
+        llm: The language model to use for generating the response
+        embeddings: The embeddings model for document reranking
+        optimization_mode: The mode determining the trade-off between speed and quality
 
-    Returns:
-        Dict[str, Any]: A dictionary containing the type of response and the generated answer or error message.
+    Yields:
+        Dict[str, Any]: Dictionaries containing response types and data
     """
-    try:
-        logger.info("Starting web search for query: %s", query)
-
-        # Step 1: Rephrase the query
-        rephraser = LLMChain(
-            llm=llm,
-            prompt=PromptTemplate(
-                template="""
-                You are an AI question rephraser. Rephrase the follow-up question so it is a standalone question.
-                If it's a simple writing task or greeting, return "not_needed".
-                If the user asks about a specific URL or wants to summarize a webpage, return the URL and "summarize" as the question.
-
-                Chat history:
-                {chat_history}
-
-                Follow up question: {query}
-                Rephrased question:
-                """,
-                input_variables=["chat_history", "query"]
-            )
-        )
-
-        rephrased_query = await rephraser.arun(chat_history=format_chat_history_as_string(history), query=query)
-        logger.debug("Rephrased query: %s", rephrased_query)
-
-        if rephrased_query.lower() == "not_needed":
-            logger.info("Query doesn't require web search")
-            return {"type": "response", "data": "I don't need to search for that. How can I assist you?"}
-
-        # Step 2: Perform web search or fetch document content
-        if "http" in rephrased_query.lower():
-            logger.info("Fetching content from URL: %s", rephrased_query.split()[-1])
-            url = rephrased_query.split()[-1]
-            docs = await get_documents_from_links([url])
-            context = "\n".join([doc.page_content for doc in docs])
-        else:
-            logger.info("Performing web search for: %s", rephrased_query)
-            search_results = await search_searxng(rephrased_query)
-            context = "\n".join([f"{i+1}. {result['content']}" for i, result in enumerate(search_results['results'])])
-
-        # Step 3: Generate response
-        response_generator = LLMChain(
-            llm=llm,
-            prompt=ChatPromptTemplate.from_messages([
-                ("system", """
-                You are Perplexica, an AI model expert at searching the web and answering queries.
-                Generate an informative and relevant response based on the provided context.
-                Use an unbiased and journalistic tone. Do not repeat the text.
-                Cite your sources using [number] notation at the end of each sentence.
-                If there's nothing relevant in the search results, say "I couldn't find any relevant information on this topic."
-                """),
-                ("human", "{query}"),
-                ("human", "Context:\n{context}")
-            ])
-        )
-
-        response = await response_generator.arun(query=query, context=context)
-        logger.info("Generated response for web search query")
-
-        return {"type": "response", "data": response}
-
-    except Exception as e:
-        logger.error("Error in handle_web_search: %s", str(e), exc_info=True)
-        return {"type": "error", "data": "An error occurred while processing your request. Please try again later."}
-
-# You may need to implement additional helper functions and classes as needed
+    agent = WebSearchAgent(llm, embeddings, optimization_mode)
+    async for result in agent.handle_search(query, history):
+        yield result

@@ -2,71 +2,178 @@
 Video Search Agent Module
 
 This module provides functionality for performing video searches using the SearxNG search engine
-with YouTube as the primary source. It processes the results using a language model to generate
-summaries of the video search results.
+with YouTube as the primary source. It specifically handles video content with support for
+thumbnails and embedded iframes.
 """
 
-from langchain.schema import BaseMessage
+from typing import List, Dict, Any, Literal, AsyncGenerator
+from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import PromptTemplate
+from langchain.output_parsers import StrOutputParser
 from backend.lib.searxng import search_searxng
-from typing import List, Dict, Any
+from backend.utils.logger import logger
+from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
 
-async def handle_video_search(query: str, history: List[BaseMessage], llm: BaseChatModel, embeddings: Embeddings) -> Dict[str, Any]:
+VIDEO_SEARCH_CHAIN_PROMPT = """
+You will be given a conversation below and a follow up question. You need to rephrase the follow-up question so it is a standalone question that can be used by the LLM to search Youtube for videos.
+You need to make sure the rephrased question agrees with the conversation and is relevant to the conversation.
+
+Example:
+1. Follow up question: How does a car work?
+Rephrased: How does a car work?
+
+2. Follow up question: What is the theory of relativity?
+Rephrased: What is theory of relativity
+
+3. Follow up question: How does an AC work?
+Rephrased: How does an AC work
+
+Conversation:
+{chat_history}
+
+Follow up question: {query}
+Rephrased question:
+"""
+
+class VideoSearchAgent(AbstractAgent):
+    """Agent for performing video searches and retrieving results."""
+
+    async def create_retriever_chain(self) -> RunnableSequence:
+        """Create the video search retriever chain."""
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=PromptTemplate.from_template(VIDEO_SEARCH_CHAIN_PROMPT)
+        )
+        str_parser = StrOutputParser()
+        
+        async def process_input(input_data: Dict[str, Any]) -> str:
+            """Process the input through the LLM chain."""
+            try:
+                return await chain.arun(
+                    chat_history=input_data["chat_history"],
+                    query=input_data["query"]
+                )
+            except Exception as e:
+                logger.error(f"Error in LLM chain: {str(e)}")
+                return input_data["query"]
+        
+        async def perform_search(query: str) -> Dict[str, Any]:
+            """Perform the video search using YouTube through SearxNG."""
+            try:
+                res = await search_searxng(query, {
+                    "engines": ["youtube"]
+                })
+                
+                documents = []
+                for result in res["results"]:
+                    if (result.get("thumbnail") and 
+                        result.get("url") and 
+                        result.get("title") and 
+                        result.get("iframe_src")):
+                        documents.append(Document(
+                            page_content="",  # Video searches don't need text content
+                            metadata={
+                                "img_src": result["thumbnail"],
+                                "url": result["url"],
+                                "title": result["title"],
+                                "iframe_src": result["iframe_src"]
+                            }
+                        ))
+                
+                return {"query": query, "docs": documents[:10]}  # Return top 10 videos
+                
+            except Exception as e:
+                logger.error(f"Error in video search: {str(e)}")
+                return {"query": query, "docs": []}
+        
+        return RunnableSequence([
+            process_input,
+            str_parser.parse,
+            perform_search
+        ])
+
+    async def create_answering_chain(self) -> RunnableSequence:
+        """Create the video search answering chain."""
+        retriever_chain = await self.create_retriever_chain()
+        
+        async def process_results(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Process the retriever results into the final format."""
+            try:
+                result = await retriever_chain.invoke(input_data)
+                
+                if not result["docs"]:
+                    return {
+                        "type": "response",
+                        "data": []
+                    }
+                
+                # Extract video data from documents
+                videos = [
+                    {
+                        "img_src": doc.metadata["img_src"],
+                        "url": doc.metadata["url"],
+                        "title": doc.metadata["title"],
+                        "iframe_src": doc.metadata["iframe_src"]
+                    }
+                    for doc in result["docs"]
+                ]
+                
+                return {
+                    "type": "response",
+                    "data": videos
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing video search results: {str(e)}")
+                return {
+                    "type": "error",
+                    "data": "An error occurred while processing the video search results"
+                }
+        
+        return RunnableSequence([process_results])
+
+    def format_prompt(self, query: str, context: str) -> str:
+        """Format the prompt for the language model."""
+        # Not used for video search as it doesn't require text generation
+        return ""
+
+    async def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse the response from the language model."""
+        # Not used for video search as it doesn't require text generation
+        return {
+            "type": "response",
+            "data": response
+        }
+
+async def handle_video_search(
+    query: str,
+    history: List[BaseMessage],
+    llm: BaseChatModel,
+    embeddings: Embeddings,
+    optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
+) -> List[Dict[str, str]]:
     """
-    Handle a video search query and generate a response based on search results.
-
-    This function performs the following steps:
-    1. Executes a video search query using SearxNG with YouTube as the engine.
-    2. Processes the search results to create a list of video information.
-    3. Uses a language model to generate a summary of the video search results.
+    Handle a video search query.
 
     Args:
-        query (str): The video search query.
-        history (List[BaseMessage]): The chat history (not used in the current implementation).
-        llm (BaseChatModel): The language model to use for generating the response.
-        embeddings (Embeddings): The embeddings model (not used in the current implementation).
+        query: The video search query
+        history: The chat history
+        llm: The language model to use for query processing
+        embeddings: The embeddings model (unused for video search)
+        optimization_mode: The optimization mode (unused for video search)
 
     Returns:
-        Dict[str, Any]: A dictionary containing the type of response, the generated summary,
-                        and a list of video results.
+        List[Dict[str, str]]: A list of video results, each containing:
+            - img_src: URL of the video thumbnail
+            - url: URL of the video page
+            - title: Title of the video
+            - iframe_src: Embedded iframe URL for the video
     """
-    # Implement video search logic here
-    search_results = await search_searxng(query, {"engines": "youtube"})
-
-    video_results = [
-        {
-            "title": result.get("title", ""),
-            "url": result.get("url", ""),
-            "thumbnail": result.get("thumbnail", ""),
-            "description": result.get("content", "")
-        }
-        for result in search_results.get("results", [])
-    ]
-
-    response_generator = LLMChain(
-        llm=llm,
-        prompt=ChatPromptTemplate.from_messages([
-            ("system", """
-            You are an AI video search assistant. Summarize the video search results based on the provided information.
-            Focus on the main topics, content creators, and relevance of the videos to the query.
-            If no relevant videos are found, suggest refining the search query or exploring related topics.
-            Use an informative and engaging tone, highlighting key points from video descriptions.
-            """),
-            ("human", "{query}"),
-            ("human", "Video search results:\n{context}")
-        ])
-    )
-
-    context = "\n".join([f"{i+1}. {result['title']} - {result['description'][:200]}..." for i, result in enumerate(video_results)])
-    response = await response_generator.arun(query=query, context=context)
-
-    return {
-        "type": "response",
-        "data": response,
-        "videos": video_results
-    }
-
-# Additional helper functions can be implemented as needed
+    agent = VideoSearchAgent(llm, embeddings, optimization_mode)
+    async for result in agent.handle_search(query, history):
+        if result["type"] == "response":
+            return result["data"]
+    return []  # Return empty list if no results or error

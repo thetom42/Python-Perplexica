@@ -1,75 +1,101 @@
 """
 Writing Assistant Agent Module
 
-This module provides functionality for assisting users with their writing tasks,
-offering suggestions, improvements, and feedback using a language model.
+This module provides functionality for assisting users with their writing tasks.
+It focuses on providing direct writing assistance without performing web searches.
 """
 
-from langchain.schema import BaseMessage
+from typing import List, Dict, Any, Literal, AsyncGenerator
+from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
-from langchain.prompts import ChatPromptTemplate
-from typing import List, Dict, Any
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.output_parsers import StrOutputParser
+from backend.utils.logger import logger
+from backend.agents.abstract_agent import AbstractAgent, RunnableSequence
 
-async def handle_writing_assistance(query: str, history: List[BaseMessage], llm: BaseChatModel, embeddings: Embeddings) -> Dict[str, Any]:
+WRITING_ASSISTANT_PROMPT = """
+You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are currently set on focus mode 'Writing Assistant', this means you will be helping the user write a response to a given query. 
+Since you are a writing assistant, you would not perform web searches. If you think you lack information to answer the query, you can ask the user for more information or suggest them to switch to a different focus mode.
+"""
+
+class WritingAssistantAgent(AbstractAgent):
+    """Agent for providing writing assistance without web searches."""
+
+    async def create_retriever_chain(self) -> RunnableSequence:
+        """Create the writing assistant retriever chain."""
+        async def process_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Process the input and return empty docs since we don't need retrieval."""
+            return {"query": input_data["query"], "docs": []}
+        
+        return RunnableSequence([process_input])
+
+    async def create_answering_chain(self) -> RunnableSequence:
+        """Create the writing assistant answering chain."""
+        chain = LLMChain(
+            llm=self.llm,
+            prompt=ChatPromptTemplate.from_messages([
+                ("system", WRITING_ASSISTANT_PROMPT),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("human", "{query}")
+            ])
+        )
+        str_parser = StrOutputParser()
+        
+        async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Generate a response to the user's writing-related query."""
+            try:
+                response = await chain.arun(
+                    query=input_data["query"],
+                    chat_history=input_data["chat_history"]
+                )
+                
+                return {
+                    "type": "response",
+                    "data": str_parser.parse(response)
+                }
+            except Exception as e:
+                logger.error(f"Error in writing assistant chain: {str(e)}")
+                return {
+                    "type": "error",
+                    "data": "An error occurred while processing your writing request"
+                }
+        
+        return RunnableSequence([generate_response])
+
+    def format_prompt(self, query: str, context: str) -> str:
+        """Format the prompt for the language model."""
+        # Not used as we use a fixed prompt template in create_answering_chain
+        return WRITING_ASSISTANT_PROMPT
+
+    async def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse the response from the language model."""
+        return {
+            "type": "response",
+            "data": response
+        }
+
+async def handle_writing_assistant(
+    query: str,
+    history: List[BaseMessage],
+    llm: BaseChatModel,
+    embeddings: Embeddings,
+    optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
+) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Handle a writing assistance request and generate a response based on the user's query and chat history.
-
-    This function performs the following steps:
-    1. Creates a language model chain with a specific prompt for writing assistance.
-    2. Runs the chain with the formatted chat history and current query.
-    3. Returns the generated writing assistance.
+    Handle a writing assistance request and generate streaming responses.
 
     Args:
-        query (str): The user's writing-related query or request.
-        history (List[BaseMessage]): The chat history.
-        llm (BaseChatModel): The language model to use for generating the response.
-        embeddings (Embeddings): The embeddings model (not used in the current implementation).
+        query: The user's writing-related query or request
+        history: The chat history
+        llm: The language model to use for generating the response
+        embeddings: Not used for writing assistance but required by base class
+        optimization_mode: Not used for writing assistance but required by base class
 
-    Returns:
-        Dict[str, Any]: A dictionary containing the type of response and the generated writing assistance.
+    Yields:
+        Dict[str, Any]: Dictionaries containing response types and data
     """
-    writing_assistant = LLMChain(
-        llm=llm,
-        prompt=ChatPromptTemplate.from_messages([
-            ("system", """
-            You are an AI writing assistant. Your task is to help users improve their writing,
-            provide suggestions, and offer constructive feedback. Based on the user's query and chat history,
-            provide appropriate writing assistance. This may include:
-            1. Suggesting improvements for grammar, style, and clarity
-            2. Offering alternative phrasings or word choices
-            3. Providing structure suggestions for essays or articles
-            4. Helping with brainstorming ideas or overcoming writer's block
-            5. Explaining writing concepts or techniques
-
-            Tailor your response to the specific needs expressed in the user's query.
-            Be encouraging and constructive in your feedback.
-            """),
-            ("human", "Chat history:\n{history}\n\nCurrent query: {query}\n\nProvide writing assistance:"),
-        ])
-    )
-
-    assistance = await writing_assistant.arun(history=format_chat_history(history), query=query)
-
-    return {
-        "type": "response",
-        "data": assistance
-    }
-
-def format_chat_history(history: List[BaseMessage]) -> str:
-    """
-    Format the chat history into a string representation.
-
-    This function takes the last 5 messages from the chat history and
-    formats them into a string, with each message prefixed by its type.
-
-    Args:
-        history (List[BaseMessage]): The full chat history.
-
-    Returns:
-        str: A formatted string representation of the last 5 messages in the chat history.
-    """
-    return "\n".join([f"{msg.type}: {msg.content}" for msg in history[-5:]])  # Only use last 5 messages for context
-
-# Additional helper functions can be implemented as needed
+    agent = WritingAssistantAgent(llm, embeddings, optimization_mode)
+    async for result in agent.handle_search(query, history):
+        yield result

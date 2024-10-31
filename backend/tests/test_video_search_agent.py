@@ -1,88 +1,221 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.video_search_agent import handle_video_search
+from backend.agents.video_search_agent import (
+    handle_video_search,
+    create_video_search_chain,
+    RunnableSequence
+)
 
 @pytest.fixture
 def mock_chat_model():
-    return AsyncMock()
+    mock = AsyncMock()
+    mock.arun = AsyncMock()
+    return mock
 
 @pytest.fixture
 def mock_embeddings_model():
     return AsyncMock()
 
+@pytest.fixture
+def sample_video_results():
+    return {
+        "results": [
+            {
+                "title": "Python Tutorial",
+                "url": "https://youtube.com/watch?v=1",
+                "thumbnail": "https://i.ytimg.com/vi/1/default.jpg",
+                "iframe_src": "https://www.youtube.com/embed/1"
+            },
+            {
+                "title": "Advanced Python",
+                "url": "https://youtube.com/watch?v=2",
+                "thumbnail": "https://i.ytimg.com/vi/2/default.jpg",
+                "iframe_src": "https://www.youtube.com/embed/2"
+            }
+        ]
+    }
+
 @pytest.mark.asyncio
-async def test_handle_video_search(mock_chat_model, mock_embeddings_model):
-    query = "Best cooking tutorials for beginners"
+async def test_handle_video_search_basic(mock_chat_model):
+    query = "Python programming tutorials"
     history = [
         HumanMessage(content="Hello"),
-        AIMessage(content="Hi there! How can I help you find videos today?")
+        AIMessage(content="Hi there!")
     ]
 
-    with patch('backend.agents.video_search_agent.search_videos') as mock_search, \
-         patch('backend.lib.providers.get_chat_model', return_value=mock_chat_model), \
-         patch('backend.lib.providers.get_embeddings_model', return_value=mock_embeddings_model):
-
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {
             "results": [
-                {"title": "Cooking Basics for Beginners", "description": "Learn essential cooking techniques for novice chefs."}
+                {
+                    "title": "Python Tutorial",
+                    "url": "https://youtube.com/watch?v=1",
+                    "thumbnail": "https://i.ytimg.com/vi/1/default.jpg",
+                    "iframe_src": "https://www.youtube.com/embed/1"
+                }
             ]
         }
 
-        mock_chat_model.arun.return_value = "I found a great cooking tutorial for beginners titled 'Cooking Basics for Beginners'. This video covers essential cooking techniques that are perfect for novice chefs."
-
-        result = await handle_video_search(query, history, mock_chat_model, mock_embeddings_model)
-
-        assert result["type"] == "response"
-        assert "Cooking Basics for Beginners" in result["data"]
-        assert "essential cooking techniques" in result["data"].lower()
-        mock_search.assert_called_once_with(query)
-        mock_chat_model.arun.assert_called_once()
+        result = await handle_video_search(query, history, mock_chat_model)
+        
+        assert len(result) > 0
+        assert "title" in result[0]
+        assert "url" in result[0]
+        assert "img_src" in result[0]
+        assert "iframe_src" in result[0]
 
 @pytest.mark.asyncio
-async def test_handle_video_search_no_results(mock_chat_model, mock_embeddings_model):
-    query = "Non-existent video topic"
-    history = []
-
-    with patch('backend.agents.video_search_agent.search_videos') as mock_search, \
-         patch('backend.lib.providers.get_chat_model', return_value=mock_chat_model), \
-         patch('backend.lib.providers.get_embeddings_model', return_value=mock_embeddings_model):
-
+async def test_video_search_chain_creation(mock_chat_model):
+    chain = await create_video_search_chain(mock_chat_model)
+    assert isinstance(chain, RunnableSequence)
+    
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {"results": []}
-
-        mock_chat_model.arun.return_value = "I'm sorry, but I couldn't find any relevant videos on that topic."
-
-        result = await handle_video_search(query, history, mock_chat_model, mock_embeddings_model)
-
-        assert result["type"] == "response"
-        assert "couldn't find any relevant videos" in result["data"].lower()
-        mock_search.assert_called_once_with(query)
-        mock_chat_model.arun.assert_called_once()
+        mock_chat_model.arun.return_value = "rephrased query"
+        
+        result = await chain.invoke({
+            "query": "test query",
+            "chat_history": []
+        })
+        
+        assert isinstance(result, list)
 
 @pytest.mark.asyncio
-async def test_handle_video_search_multiple_results(mock_chat_model, mock_embeddings_model):
-    query = "Python programming tutorials"
+async def test_query_rephrasing(mock_chat_model):
+    query = "Show me how to make a cake"
+    history = [
+        HumanMessage(content="I want to learn cooking"),
+        AIMessage(content="I can help with that!")
+    ]
+
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        mock_search.return_value = {"results": []}
+        mock_chat_model.arun.return_value = "cake making tutorial"
+
+        await handle_video_search(query, history, mock_chat_model)
+        
+        # Verify the query was processed through the rephrasing chain
+        assert mock_chat_model.arun.called
+        call_args = mock_chat_model.arun.call_args[1]
+        assert "chat_history" in call_args
+        assert "query" in call_args
+
+@pytest.mark.asyncio
+async def test_youtube_specific_search(mock_chat_model):
+    query = "test query"
     history = []
 
-    with patch('backend.agents.video_search_agent.search_videos') as mock_search, \
-         patch('backend.lib.providers.get_chat_model', return_value=mock_chat_model), \
-         patch('backend.lib.providers.get_embeddings_model', return_value=mock_embeddings_model):
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        mock_search.return_value = {"results": []}
+        
+        await handle_video_search(query, history, mock_chat_model)
+        
+        # Verify YouTube-specific search configuration
+        mock_search.assert_called_once()
+        call_args = mock_search.call_args[1]
+        assert call_args.get("engines") == ["youtube"]
 
-        mock_search.return_value = {
+@pytest.mark.asyncio
+async def test_error_handling(mock_chat_model):
+    query = "test query"
+    history = []
+
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        mock_search.side_effect = Exception("Search API error")
+        
+        result = await handle_video_search(query, history, mock_chat_model)
+        assert len(result) == 0  # Should return empty list on error
+
+@pytest.mark.asyncio
+async def test_empty_query_handling(mock_chat_model):
+    query = ""
+    history = []
+
+    result = await handle_video_search(query, history, mock_chat_model)
+    assert isinstance(result, list)
+    assert len(result) == 0
+
+@pytest.mark.asyncio
+async def test_video_result_fields(mock_chat_model, sample_video_results):
+    query = "test query"
+    history = []
+
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        mock_search.return_value = sample_video_results
+        
+        result = await handle_video_search(query, history, mock_chat_model)
+        
+        assert len(result) == len(sample_video_results["results"])
+        for video in result:
+            assert "title" in video
+            assert "url" in video
+            assert "img_src" in video
+            assert "iframe_src" in video
+            assert video["url"].startswith("https://youtube.com/watch?v=")
+            assert video["iframe_src"].startswith("https://www.youtube.com/embed/")
+
+@pytest.mark.asyncio
+async def test_result_limit(mock_chat_model):
+    query = "test query"
+    history = []
+
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        # Create more than 10 results
+        results = {
             "results": [
-                {"title": "Python for Beginners", "description": "Complete Python tutorial for newcomers to programming."},
-                {"title": "Advanced Python Techniques", "description": "Learn advanced Python concepts and best practices."}
+                {
+                    "title": f"Video {i}",
+                    "url": f"https://youtube.com/watch?v={i}",
+                    "thumbnail": f"https://i.ytimg.com/vi/{i}/default.jpg",
+                    "iframe_src": f"https://www.youtube.com/embed/{i}"
+                }
+                for i in range(15)
             ]
         }
+        mock_search.return_value = results
+        
+        result = await handle_video_search(query, history, mock_chat_model)
+        assert len(result) <= 10  # Should be limited to 10 results
 
-        mock_chat_model.arun.return_value = "I found two relevant Python programming tutorials. The first one, 'Python for Beginners', is a complete tutorial for newcomers to programming. The second one, 'Advanced Python Techniques', covers advanced concepts and best practices for more experienced programmers."
+@pytest.mark.asyncio
+async def test_optional_argument_handling(mock_chat_model, mock_embeddings_model):
+    query = "test query"
+    history = []
 
-        result = await handle_video_search(query, history, mock_chat_model, mock_embeddings_model)
+    # Should work with additional arguments
+    result1 = await handle_video_search(
+        query, history, mock_chat_model,
+        mock_embeddings_model,  # Additional positional arg
+        extra_param="value"  # Additional keyword arg
+    )
+    assert isinstance(result1, list)
+    
+    # Should work without additional arguments
+    result2 = await handle_video_search(query, history, mock_chat_model)
+    assert isinstance(result2, list)
 
-        assert result["type"] == "response"
-        assert "Python for Beginners" in result["data"]
-        assert "Advanced Python Techniques" in result["data"]
-        assert "newcomers" in result["data"].lower()
-        assert "advanced concepts" in result["data"].lower()
-        mock_search.assert_called_once_with(query)
-        mock_chat_model.arun.assert_called_once()
+@pytest.mark.asyncio
+async def test_malformed_search_results(mock_chat_model):
+    query = "test query"
+    history = []
+
+    with patch('backend.agents.video_search_agent.search_searxng') as mock_search:
+        # Missing or incomplete fields in results
+        mock_search.return_value = {
+            "results": [
+                {"title": "Test"},  # Missing required fields
+                {"url": "https://youtube.com"},  # Missing required fields
+                {
+                    "title": "Complete Video",
+                    "url": "https://youtube.com/watch?v=1",
+                    "thumbnail": "https://i.ytimg.com/vi/1/default.jpg",
+                    "iframe_src": "https://www.youtube.com/embed/1"
+                }
+            ]
+        }
+        
+        result = await handle_video_search(query, history, mock_chat_model)
+        
+        # Should only include complete results
+        assert len(result) == 1
+        assert result[0]["title"] == "Complete Video"
