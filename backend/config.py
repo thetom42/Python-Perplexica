@@ -2,23 +2,17 @@
 Configuration module for the Perplexica backend.
 
 This module provides functions to load and retrieve configuration settings
-from a TOML file, as well as update the configuration.
+from environment variables.
 """
 
-import toml
+import json
+import os
+from typing import Dict, Any, Union, List, cast
 from pathlib import Path
-from typing import Dict, Any, Union, List
+from dotenv import load_dotenv
 
-CONFIG_FILE = Path(__file__).parent.parent / "config.toml"
-
-def load_config() -> Dict[str, Any]:
-    """
-    Load the configuration from the TOML file.
-
-    Returns:
-        Dict[str, Any]: A dictionary containing the configuration settings.
-    """
-    return toml.load(CONFIG_FILE)
+# Load environment variables from .env file
+load_dotenv()
 
 def get_port() -> int:
     """
@@ -27,11 +21,10 @@ def get_port() -> int:
     Returns:
         int: The port number.
     """
-    config = load_config()
     try:
-        return int(config["GENERAL"]["PORT"])
-    except (KeyError, ValueError):
-        return 8000 #default port
+        return int(os.getenv("PORT", "8000"))
+    except ValueError:
+        return 8000  # default port
 
 def get_similarity_measure() -> str:
     """
@@ -40,11 +33,7 @@ def get_similarity_measure() -> str:
     Returns:
         str: The similarity measure.
     """
-    config = load_config()
-    try:
-        return str(config["GENERAL"]["SIMILARITY_MEASURE"])
-    except KeyError:
-        return "cosine" #default
+    return os.getenv("SIMILARITY_MEASURE", "cosine")
 
 def get_openai_api_key() -> str:
     """
@@ -53,11 +42,7 @@ def get_openai_api_key() -> str:
     Returns:
         str: The OpenAI API key.
     """
-    config = load_config()
-    try:
-        return str(config["API_KEYS"]["OPENAI"])
-    except KeyError:
-        return "" #default
+    return os.getenv("OPENAI_API_KEY", "")
 
 def get_groq_api_key() -> str:
     """
@@ -66,11 +51,7 @@ def get_groq_api_key() -> str:
     Returns:
         str: The Groq API key.
     """
-    config = load_config()
-    try:
-        return str(config["API_KEYS"]["GROQ"])
-    except KeyError:
-        return "" #default
+    return os.getenv("GROQ_API_KEY", "")
 
 def get_anthropic_api_key() -> str:
     """
@@ -79,11 +60,7 @@ def get_anthropic_api_key() -> str:
     Returns:
         str: The Anthropic API key.
     """
-    config = load_config()
-    try:
-        return str(config["API_KEYS"]["ANTHROPIC"])
-    except KeyError:
-        return "" #default
+    return os.getenv("ANTHROPIC_API_KEY", "")
 
 def get_searxng_api_endpoint() -> str:
     """
@@ -92,11 +69,7 @@ def get_searxng_api_endpoint() -> str:
     Returns:
         str: The SearXNG API endpoint.
     """
-    config = load_config()
-    try:
-        return str(config["API_ENDPOINTS"]["SEARXNG"])
-    except KeyError:
-        return "" #default
+    return os.getenv("SEARXNG_API_ENDPOINT", "")
 
 def get_ollama_api_endpoint() -> str:
     """
@@ -105,11 +78,7 @@ def get_ollama_api_endpoint() -> str:
     Returns:
         str: The Ollama API endpoint.
     """
-    config = load_config()
-    try:
-        return str(config["API_ENDPOINTS"]["OLLAMA"])
-    except KeyError:
-        return "" #default
+    return os.getenv("OLLAMA_API_ENDPOINT", "")
 
 def get_wolfram_alpha_app_id() -> str:
     """
@@ -118,8 +87,7 @@ def get_wolfram_alpha_app_id() -> str:
     Returns:
         str: The Wolfram Alpha App ID, or an empty string if not set.
     """
-    config = load_config()
-    return str(config["API_KEYS"].get("WOLFRAM_ALPHA", ""))
+    return os.getenv("WOLFRAM_ALPHA_APP_ID", "")
 
 def get_database_url() -> str:
     """
@@ -128,8 +96,7 @@ def get_database_url() -> str:
     Returns:
         str: The database URL, defaulting to a local SQLite database if not set.
     """
-    config = load_config()
-    return str(config.get("DATABASE", {}).get("URL", "sqlite:///./perplexica.db"))
+    return os.getenv("DATABASE_URL", "sqlite:///./perplexica.db")
 
 def get_redis_url() -> str:
     """
@@ -138,8 +105,7 @@ def get_redis_url() -> str:
     Returns:
         str: The Redis URL, defaulting to a local Redis instance if not set.
     """
-    config = load_config()
-    return str(config.get("CACHE", {}).get("REDIS_URL", "redis://localhost:6379/0"))
+    return os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 def get_log_level() -> str:
     """
@@ -148,40 +114,7 @@ def get_log_level() -> str:
     Returns:
         str: The logging level, defaulting to "INFO" if not set.
     """
-    config = load_config()
-    return str(config.get("LOGGING", {}).get("LEVEL", "INFO"))
-
-def update_config(new_config: Dict[str, Any]) -> None:
-    """
-    Update the configuration file with new settings.
-
-    Args:
-        new_config (Dict[str, Any]): A dictionary containing the new configuration settings.
-    """
-    current_config = load_config()
-    merged_config = {**current_config, **new_config}
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        toml.dump(merged_config, f)
-
-def get_chat_model_config() -> Dict[str, Any]:
-    """
-    Get the chat model configuration.
-
-    Returns:
-        Dict[str, Any]: A dictionary containing the chat model configuration.
-    """
-    config = load_config()
-    return config.get("CHAT_MODEL", {}) or {}
-
-def get_embedding_model_config() -> Dict[str, Any]:
-    """
-    Get the embedding model configuration.
-
-    Returns:
-        Dict[str, Any]: A dictionary containing the embedding model configuration.
-    """
-    config = load_config()
-    return config.get("EMBEDDING_MODEL", {}) or {}
+    return os.getenv("LOG_LEVEL", "INFO")
 
 def get_cors_origins() -> List[str]:
     """
@@ -190,42 +123,107 @@ def get_cors_origins() -> List[str]:
     Returns:
         list: A list of allowed CORS origins, defaulting to ["*"] if not set.
     """
-    config = load_config()
-    cors_origins = config.get("SECURITY", {}).get("CORS_ORIGINS", ["*"])
-    return [str(origin) for origin in cors_origins]
+    cors_origins = os.getenv("CORS_ORIGINS", '["*"]')
+    try:
+        origins: List[str] = json.loads(cors_origins)
+        return origins
+    except json.JSONDecodeError:
+        return ["*"]
 
-def get_api_keys() -> Dict[str, Union[str, None]]:
-    config = load_config()
-    return config.get("API_KEYS", {}) or {}
+def get_api_keys() -> Dict[str, str]:
+    """
+    Get all API keys from the configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing all API keys.
+    """
+    return {
+        "OPENAI": get_openai_api_key(),
+        "GROQ": get_groq_api_key(),
+        "ANTHROPIC": get_anthropic_api_key(),
+        "WOLFRAM_ALPHA": get_wolfram_alpha_app_id()
+    }
 
 def get_api_endpoints() -> Dict[str, str]:
-    config = load_config()
-    return config.get("API_ENDPOINTS", {}) or {}
+    """
+    Get all API endpoints from the configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing all API endpoints.
+    """
+    return {
+        "SEARXNG": get_searxng_api_endpoint(),
+        "OLLAMA": get_ollama_api_endpoint()
+    }
 
 def get_database_config() -> Dict[str, str]:
-    config = load_config()
-    return config.get("DATABASE", {}) or {}
+    """
+    Get the database configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the database configuration.
+    """
+    return {"URL": get_database_url()}
 
 def get_cache_config() -> Dict[str, str]:
-    config = load_config()
-    return config.get("CACHE", {}) or {}
+    """
+    Get the cache configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the cache configuration.
+    """
+    return {"REDIS_URL": get_redis_url()}
 
 def get_logging_config() -> Dict[str, str]:
-    config = load_config()
-    return config.get("LOGGING", {}) or {}
+    """
+    Get the logging configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the logging configuration.
+    """
+    return {"LEVEL": get_log_level()}
 
 def get_security_config() -> Dict[str, List[str]]:
-    config = load_config()
-    return config.get("SECURITY", {}) or {}
+    """
+    Get the security configuration.
+
+    Returns:
+        Dict[str, List[str]]: A dictionary containing the security configuration.
+    """
+    return {"CORS_ORIGINS": get_cors_origins()}
 
 def get_chat_model() -> Dict[str, str]:
-    config = load_config()
-    return config.get("CHAT_MODEL", {}) or {}
+    """
+    Get the chat model configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the chat model configuration.
+    """
+    return {
+        "PROVIDER": os.getenv("CHAT_MODEL_PROVIDER", "openai"),
+        "NAME": os.getenv("CHAT_MODEL_NAME", "gpt-3.5-turbo")
+    }
 
 def get_embedding_model() -> Dict[str, str]:
-    config = load_config()
-    return config.get("EMBEDDING_MODEL", {}) or {}
+    """
+    Get the embedding model configuration.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the embedding model configuration.
+    """
+    return {
+        "PROVIDER": os.getenv("EMBEDDING_MODEL_PROVIDER", "openai"),
+        "NAME": os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-ada-002")
+    }
 
 def get_general_config() -> Dict[str, Union[str, int]]:
-    config = load_config()
-    return config.get("GENERAL", {}) or {}
+    """
+    Get the general configuration.
+
+    Returns:
+        Dict[str, Union[str, int]]: A dictionary containing the general configuration.
+    """
+    return {
+        "PORT": get_port(),
+        "SIMILARITY_MEASURE": get_similarity_measure()
+    }

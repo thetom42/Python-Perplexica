@@ -1,39 +1,79 @@
-# How to Contribute to Perplexica
+# Contributing to Perplexica
 
-Hey there, thanks for deciding to contribute to Perplexica. Anything you help with will support the development of Perplexica and will make it better. Let's walk you through the key aspects to ensure your contributions are effective and in harmony with the project's setup.
+## Setting up the Development Environment
 
-## Project Structure
+### Backend Setup
 
-Perplexica's design consists of two main domains:
+1. In the root directory, locate the `.env.example` file.
+2. Copy it to `.env` and fill in the necessary configuration fields specific to the backend.
+3. Navigate to the `backend` directory and run:
+   ```bash
+   python setup.py
+   ```
+   This will:
+   - Install required dependencies
+   - Create a default .env file (if it doesn't exist)
+   - Run database migrations
 
-- **Frontend (`ui` directory)**: This is a Next.js application holding all user interface components. It's a self-contained environment that manages everything the user interacts with.
-- **Backend (root and `src` directory)**: The backend logic is situated in the `src` folder, but the root directory holds the main `package.json` for backend dependency management.
+4. Start the backend server:
+   ```bash
+   uvicorn main:app --reload --port 3001
+   ```
 
-## Setting Up Your Environment
+### Frontend Setup
 
-Before diving into coding, setting up your local environment is key. Here's what you need to do:
+1. Navigate to the `ui` directory
+2. Copy `.env.example` to `.env` and fill in the necessary fields
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
+4. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-### Backend
+### SearXNG Setup
 
-1. In the root directory, locate the `sample.config.toml` file.
-2. Rename it to `config.toml` and fill in the necessary configuration fields specific to the backend.
-3. Run `npm install` to install dependencies.
-4. Use `npm run dev` to start the backend in development mode.
+1. Install SearXNG and allow `JSON` format in the SearXNG settings.
+2. Configure the SearXNG endpoint in your `.env` file.
 
-### Frontend
+## Development Guidelines
 
-1. Navigate to the `ui` folder and repeat the process of renaming `.env.example` to `.env`, making sure to provide the frontend-specific variables.
-2. Execute `npm install` within the `ui` directory to get the frontend dependencies ready.
-3. Launch the frontend development server with `npm run dev`.
+1. Create a new branch for your feature/fix
+2. Write tests for new functionality
+3. Ensure all tests pass
+4. Update documentation as needed
+5. Submit a pull request
 
-**Please note**: Docker configurations are present for setting up production environments, whereas `npm run dev` is used for development purposes.
+## Code Style
 
-## Coding and Contribution Practices
+- Python: Follow PEP 8 guidelines
+- TypeScript/JavaScript: Use Prettier for formatting
+- Use meaningful variable and function names
+- Add comments for complex logic
+- Keep functions focused and concise
 
-Before committing changes:
+## Testing
 
-1. Ensure that your code functions correctly by thorough testing.
-2. Always run `npm run format:write` to format your code according to the project's coding standards. This helps maintain consistency and code quality.
-3. We currently do not have a code of conduct, but it is in the works. In the meantime, please be mindful of how you engage with the project and its community.
+- Write unit tests for new functionality
+- Ensure existing tests pass
+- Use pytest for Python tests
+- Use Jest for TypeScript/JavaScript tests
 
-Following these steps will help maintain the integrity of Perplexica's codebase and facilitate a smoother integration of your valuable contributions. Thank you for your support and commitment to improving Perplexica.
+## Documentation
+
+- Update README.md for significant changes
+- Document new features and API changes
+- Keep code comments up to date
+- Use clear commit messages
+
+## Pull Request Process
+
+1. Update the README.md with details of changes if needed
+2. Update the documentation with details of changes if needed
+3. The PR will be merged once you have the sign-off of other developers
+
+## Questions?
+
+Feel free to open an issue for any questions about contributing.

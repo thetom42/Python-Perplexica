@@ -6,7 +6,7 @@ from lib.providers.transformers import load_transformers_embeddings_models
 from langchain.chat_models.base import BaseChatModel
 from langchain_openai.chat_models.base import ChatOpenAI
 from langchain.embeddings.base import Embeddings
-from config import load_config
+import config
 
 chat_model_providers = {
     "openai": load_openai_chat_models,
@@ -39,24 +39,26 @@ async def get_available_embedding_model_providers():
     return models
 
 def get_chat_model() -> BaseChatModel:
-    config = load_config()
-    provider = config.get("CHAT_MODEL", {}).get("PROVIDER", "openai")
-    model_name = config.get("CHAT_MODEL", {}).get("MODEL", "gpt-3.5-turbo")
+    chat_config = config.get_chat_model()
+    provider = chat_config["PROVIDER"]
+    model_name = chat_config["NAME"]
 
     if provider == "custom_openai":
+        # For custom OpenAI-compatible endpoints, we need to get the API key and base URL
+        # from the environment variables directly since they're not part of the standard config
         return ChatOpenAI(
             model_name=model_name,
-            openai_api_key=config.get("CHAT_MODEL", {}).get("API_KEY"),
-            base_url=config.get("CHAT_MODEL", {}).get("BASE_URL"),
+            openai_api_key=config.get_openai_api_key(),
+            base_url=config.get_api_endpoints().get("OPENAI", ""),
         )
 
     models = chat_model_providers[provider]()
     return models.get(model_name)
 
 def get_embeddings_model() -> Embeddings:
-    config = load_config()
-    provider = config.get("EMBEDDING_MODEL", {}).get("PROVIDER", "openai")
-    model_name = config.get("EMBEDDING_MODEL", {}).get("MODEL", "text-embedding-ada-002")
+    embedding_config = config.get_embedding_model()
+    provider = embedding_config["PROVIDER"]
+    model_name = embedding_config["NAME"]
 
     models = embedding_model_providers[provider]()
     return models.get(model_name)

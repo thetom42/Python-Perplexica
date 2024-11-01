@@ -33,6 +33,7 @@ urllib3==2.1.0
 uvicorn==0.26.0
 yarl==1.9.4
 langchain-community==0.3.4
+langchain-openai==0.2.5
 
 # Testing dependencies
 pytest==7.4.4
