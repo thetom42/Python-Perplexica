@@ -19,6 +19,8 @@ from utils.logger import logger
 from lib.output_parsers.line_output_parser import LineOutputParser
 from lib.output_parsers.list_line_output_parser import ListLineOutputParser
 from agents.abstract_agent import AbstractAgent
+from utils.compute_similarity import compute_similarity
+
 
 BASIC_SEARCH_RETRIEVER_PROMPT = """
 You are an AI question rephraser. You will be given a conversation and a follow-up question,  you will have to rephrase the follow up question so it is a standalone question and can be used by another LLM to search the web for information to answer it.
@@ -327,7 +329,6 @@ class WebSearchAgent(AbstractAgent):
 
             similarities = []
             for i, doc_embedding in enumerate(doc_embeddings):
-                from utils.compute_similarity import compute_similarity
                 sim = compute_similarity(query_embedding, doc_embedding)
                 similarities.append({"index": i, "similarity": sim})
 

@@ -23,7 +23,7 @@ class AbstractAgent(ABC):
     def __init__(
         self,
         llm: BaseChatModel,
-        embeddings: Embeddings,
+        embeddings: Optional[Embeddings] = None,
         optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
     ):
         """
@@ -31,7 +31,7 @@ class AbstractAgent(ABC):
 
         Args:
             llm: The language model to use
-            embeddings: The embeddings model for document reranking
+            embeddings: Optional embeddings model for document reranking
             optimization_mode: The mode determining the trade-off between speed and quality
         """
         self.llm = llm
@@ -89,7 +89,7 @@ class AbstractAgent(ABC):
 
             docs_with_content = [doc for doc in docs if doc.page_content and len(doc.page_content) > 0]
 
-            if self.optimization_mode == "speed":
+            if self.optimization_mode == "speed" or not self.embeddings:
                 return docs_with_content[:15]
             elif self.optimization_mode == "balanced":
                 doc_embeddings = await self.embeddings.embed_documents([doc.page_content for doc in docs_with_content])

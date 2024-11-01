@@ -1,12 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage, Document
-from agents.web_search_agent import (
-    handle_web_search,
-    create_basic_web_search_retriever_chain,
-    create_basic_web_search_answering_chain,
-    RunnableSequence
-)
+from agents.web_search_agent import handle_web_search
 
 @pytest.fixture
 def mock_chat_model():
@@ -131,10 +126,10 @@ async def test_webpage_summarization(mock_chat_model, mock_embeddings_model):
 async def test_optimization_modes(mock_chat_model, mock_embeddings_model, sample_web_results):
     query = "test query"
     history = []
-    
+
     with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
         mock_search.return_value = sample_web_results
-        
+
         for mode in ["speed", "balanced", "quality"]:
             async for result in handle_web_search(
                 query, history, mock_chat_model, mock_embeddings_model, mode
@@ -151,7 +146,7 @@ async def test_error_handling(mock_chat_model, mock_embeddings_model):
 
     with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
         mock_search.side_effect = Exception("Search API error")
-        
+
         async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "error":
                 assert "error" in result["data"].lower()
@@ -176,7 +171,7 @@ async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_we
 
         sources_received = False
         response_received = False
-        
+
         async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "sources":
                 sources_received = True
@@ -188,7 +183,7 @@ async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_we
                 response_received = True
                 assert "[1]" in result["data"]
                 assert "[2]" in result["data"]
-        
+
         assert sources_received and response_received
 
 @pytest.mark.asyncio
@@ -220,7 +215,7 @@ async def test_multiple_link_summarization(mock_chat_model, mock_embeddings_mode
                 metadata={"title": "Article 2", "url": "https://example.com/2"}
             )
         ]
-        
+
         mock_chat_model.arun.side_effect = [
             "<question>summarize</question>\n<links>\nhttps://example.com/1\nhttps://example.com/2\n</links>",
             "Combined summary"
@@ -232,7 +227,7 @@ async def test_multiple_link_summarization(mock_chat_model, mock_embeddings_mode
             if result["type"] == "sources":
                 for source in result["data"]:
                     sources_seen.add(source["url"])
-        
+
         assert "https://example.com/1" in sources_seen
         assert "https://example.com/2" in sources_seen
 
@@ -254,7 +249,7 @@ async def test_malformed_search_results(mock_chat_model, mock_embeddings_model):
                 }
             ]
         }
-        
+
         async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
             if result["type"] == "sources":
                 # Should handle malformed results gracefully

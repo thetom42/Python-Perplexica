@@ -5,7 +5,7 @@ This module provides functionality for assisting users with their writing tasks.
 It focuses on providing direct writing assistance without performing web searches.
 """
 
-from typing import List, Dict, Any, Literal, AsyncGenerator
+from typing import List, Dict, Any, Literal, AsyncGenerator, Optional
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
@@ -79,7 +79,7 @@ async def handle_writing_assistant(
     query: str,
     history: List[BaseMessage],
     llm: BaseChatModel,
-    embeddings: Embeddings,
+    embeddings: Optional[Embeddings] = None,
     optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -89,7 +89,7 @@ async def handle_writing_assistant(
         query: The user's writing-related query or request
         history: The chat history
         llm: The language model to use for generating the response
-        embeddings: Not used for writing assistance but required by base class
+        embeddings: Optional embeddings model, not used for writing assistance
         optimization_mode: Not used for writing assistance but required by base class
 
     Yields:

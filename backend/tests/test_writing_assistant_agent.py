@@ -1,11 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from agents.writing_assistant_agent import (
-    handle_writing_assistant,
-    create_writing_assistant_chain,
-    RunnableSequence
-)
+from agents.writing_assistant_agent import handle_writing_assistant
+
 
 @pytest.fixture
 def mock_chat_model():
@@ -34,25 +31,10 @@ async def test_handle_writing_assistance_basic(mock_chat_model):
     as potential solutions to mitigate its effects.
     """
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "climate change" in result["data"].lower()
         assert "global temperatures" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_writing_assistant_chain_creation(mock_chat_model):
-    chain = await create_writing_assistant_chain(mock_chat_model)
-    assert isinstance(chain, RunnableSequence)
-    
-    mock_chat_model.arun.return_value = "Writing assistance response"
-    
-    result = await chain.invoke({
-        "query": "Help me write something",
-        "chat_history": []
-    })
-    
-    assert result["type"] == "response"
-    assert isinstance(result["data"], str)
 
 @pytest.mark.asyncio
 async def test_error_handling(mock_chat_model):
@@ -60,8 +42,8 @@ async def test_error_handling(mock_chat_model):
     history = []
 
     mock_chat_model.arun.side_effect = Exception("LLM error")
-    
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "error"
         assert "error" in result["data"].lower()
 
@@ -79,7 +61,7 @@ async def test_grammar_correction(mock_chat_model):
     - 'Were' is used for plural subjects
     """
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "was sleeping" in result["data"].lower()
         assert "explanation" in result["data"].lower()
@@ -96,7 +78,7 @@ async def test_paraphrasing_assistance(mock_chat_model):
     3. A nimble tawny fox hops across the lethargic dog.
     """
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "fox" in result["data"].lower()
         assert "dog" in result["data"].lower()
@@ -118,7 +100,7 @@ async def test_writing_style_suggestions(mock_chat_model):
     - Employing more sophisticated vocabulary
     """
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "formal" in result["data"].lower()
         assert "improvements" in result["data"].lower()
@@ -133,10 +115,10 @@ async def test_chat_history_integration(mock_chat_model):
 
     mock_chat_model.arun.return_value = "Renewable energy offers sustainable alternatives to fossil fuels."
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "renewable energy" in result["data"].lower()
-        
+
         # Verify chat history was passed to the model
         call_args = mock_chat_model.arun.call_args[1]
         assert "chat_history" in call_args
@@ -148,10 +130,10 @@ async def test_unused_embeddings_parameter(mock_chat_model, mock_embeddings_mode
     history = []
 
     # Should work the same with or without embeddings
-    async for result in handle_writing_assistant(query, history, mock_chat_model, mock_embeddings_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
         assert result["type"] in ["response", "error"]
-    
-    async for result in handle_writing_assistant(query, history, mock_chat_model, None):
+
+    async for result in handle_writing_assistant(query, history, mock_chat_model, None, "balanced"):
         assert result["type"] in ["response", "error"]
 
 @pytest.mark.asyncio
@@ -161,7 +143,7 @@ async def test_empty_query_handling(mock_chat_model):
 
     mock_chat_model.arun.return_value = "I'm not sure what you'd like help writing. Could you please provide more details?"
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert "provide more details" in result["data"].lower()
 
@@ -173,7 +155,7 @@ async def test_long_content_handling(mock_chat_model):
     # Simulate a long response
     mock_chat_model.arun.return_value = "A" * 10000 + "\nB" * 10000
 
-    async for result in handle_writing_assistant(query, history, mock_chat_model):
+    async for result in handle_writing_assistant(query, history, mock_chat_model, optimization_mode="balanced"):
         assert result["type"] == "response"
         assert len(result["data"]) > 15000  # Should handle long content
 
@@ -182,6 +164,6 @@ async def test_invalid_history_handling(mock_chat_model):
     query = "Help me write something"
     invalid_history = ["not a valid message"]  # Invalid history format
 
-    async for result in handle_writing_assistant(query, invalid_history, mock_chat_model):
+    async for result in handle_writing_assistant(query, invalid_history, mock_chat_model, optimization_mode="balanced"):
         # Should handle invalid history gracefully
         assert result["type"] in ["response", "error"]

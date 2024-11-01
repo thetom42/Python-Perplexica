@@ -1,10 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from agents.video_search_agent import (
-    handle_video_search,
-    VideoSearchAgent
-)
+from agents.video_search_agent import handle_video_search, VideoSearchAgent
 
 @pytest.fixture
 def mock_chat_model():

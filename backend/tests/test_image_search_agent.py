@@ -41,7 +41,7 @@ def sample_search_result():
 async def test_image_search_agent_basic(mock_chat_model, mock_embeddings_model, sample_search_result):
     """Test basic image search functionality."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         mock_search.return_value = sample_search_result
         mock_chat_model.invoke.return_value.content = "Eiffel Tower"
@@ -61,7 +61,7 @@ async def test_image_search_agent_basic(mock_chat_model, mock_embeddings_model, 
 async def test_image_search_agent_no_results(mock_chat_model, mock_embeddings_model):
     """Test handling of no search results."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         mock_search.return_value = {"results": []}
         mock_chat_model.invoke.return_value.content = "test query"
@@ -79,7 +79,7 @@ async def test_image_search_agent_no_results(mock_chat_model, mock_embeddings_mo
 async def test_image_search_agent_error_handling(mock_chat_model, mock_embeddings_model):
     """Test error handling in image search."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         mock_search.side_effect = Exception("Search API error")
         mock_chat_model.invoke.return_value.content = "test query"
@@ -97,7 +97,7 @@ async def test_image_search_agent_error_handling(mock_chat_model, mock_embedding
 async def test_image_search_agent_malformed_results(mock_chat_model, mock_embeddings_model):
     """Test handling of malformed search results."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         # Missing required fields in results
         mock_search.return_value = {
@@ -118,7 +118,7 @@ async def test_image_search_agent_malformed_results(mock_chat_model, mock_embedd
             "query": "test query",
             "chat_history": []
         })
-        
+
         assert len(result["images"]) == 1
         assert result["images"][0]["title"] == "Complete"
 
@@ -126,7 +126,7 @@ async def test_image_search_agent_malformed_results(mock_chat_model, mock_embedd
 async def test_image_search_agent_result_limit(mock_chat_model, mock_embeddings_model, sample_search_result):
     """Test limiting of search results."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         # Create more than 10 results
         results = {"results": sample_search_result["results"] * 6}  # 12 results
@@ -138,7 +138,7 @@ async def test_image_search_agent_result_limit(mock_chat_model, mock_embeddings_
             "query": "test query",
             "chat_history": []
         })
-        
+
         assert len(result["images"]) <= 10
 
 @pytest.mark.asyncio
@@ -165,11 +165,11 @@ async def test_handle_image_search_integration(mock_chat_model, mock_embeddings_
 async def test_multiple_search_engines_integration(mock_chat_model, mock_embeddings_model):
     """Test integration with multiple search engines."""
     agent = ImageSearchAgent(mock_chat_model, mock_embeddings_model)
-    
+
     with patch('agents.image_search_agent.search_searxng') as mock_search:
         mock_chat_model.invoke.return_value.content = "test query"
         await agent.create_retriever_chain()
-        
+
         mock_search.assert_called_once()
         call_kwargs = mock_search.call_args[1]
         assert "engines" in call_kwargs

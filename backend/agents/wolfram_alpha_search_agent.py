@@ -5,7 +5,7 @@ This module provides functionality for performing Wolfram Alpha searches using t
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Literal, AsyncGenerator
+from typing import List, Dict, Any, Literal, AsyncGenerator, Optional
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
@@ -176,7 +176,7 @@ async def handle_wolfram_alpha_search(
     query: str,
     history: List[BaseMessage],
     llm: BaseChatModel,
-    embeddings: Embeddings,
+    embeddings: Optional[Embeddings] = None,
     optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
@@ -186,7 +186,7 @@ async def handle_wolfram_alpha_search(
         query: The Wolfram Alpha search query
         history: The chat history
         llm: The language model to use for generating the response
-        embeddings: The embeddings model (unused for Wolfram Alpha search)
+        embeddings: Optional embeddings model (unused for Wolfram Alpha search)
         optimization_mode: The optimization mode (unused for Wolfram Alpha search)
 
     Yields:

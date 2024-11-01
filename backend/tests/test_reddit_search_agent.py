@@ -1,10 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from agents.reddit_search_agent import (
-    handle_reddit_search,
-    RedditSearchAgent
-)
+from agents.reddit_search_agent import handle_reddit_search, RedditSearchAgent
 
 @pytest.fixture
 def mock_chat_model():
