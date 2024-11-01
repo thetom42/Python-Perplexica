@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from langchain.schema import HumanMessage, AIMessage
-from agents.suggestion_generator_agent import generate_suggestions
+from agents.suggestion_generator_agent import handle_suggestion_generation
 from lib.providers import get_available_chat_model_providers
 from utils.logger import logger
 from langchain.embeddings import OpenAIEmbeddings
@@ -38,7 +38,7 @@ async def generate_suggestions_route(request: SuggestionRequest) -> Dict[str, Li
             raise HTTPException(status_code=500, detail="Invalid LLM model selected")
 
         embeddings = OpenAIEmbeddings()
-        suggestions = await generate_suggestions(
+        suggestions = await handle_suggestion_generation(
             history=chat_history,
             llm=llm,
             embeddings=embeddings,

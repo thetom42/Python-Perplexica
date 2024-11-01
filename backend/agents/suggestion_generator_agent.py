@@ -95,7 +95,7 @@ class SuggestionGeneratorAgent(AbstractAgent):
             "data": response.split("\n") if response else []
         }
 
-async def generate_suggestions(
+async def handle_suggestion_generation(
     history: List[BaseMessage],
     llm: BaseChatModel,
     embeddings: Optional[Embeddings] = None,  # Not used but kept for interface compatibility

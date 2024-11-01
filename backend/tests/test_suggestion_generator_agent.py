@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from langchain.schema import HumanMessage, AIMessage
-from agents.suggestion_generator_agent import generate_suggestions, SuggestionGeneratorAgent
+from agents.suggestion_generator_agent import handle_suggestion_generation, SuggestionGeneratorAgent
 
 @pytest.fixture
 def mock_chat_model():
@@ -29,7 +29,7 @@ How can I make a balanced breakfast?
 What should I avoid for breakfast?
 </suggestions>"""
 
-    suggestions = await generate_suggestions(history, mock_chat_model, mock_embeddings_model)
+    suggestions = await handle_suggestion_generation(history, mock_chat_model, mock_embeddings_model)
 
     assert isinstance(suggestions, list)
     assert len(suggestions) > 0
@@ -46,7 +46,7 @@ What topics interest you?
 Would you like to learn something new?
 </suggestions>"""
 
-    suggestions = await generate_suggestions(history, mock_chat_model, mock_embeddings_model)
+    suggestions = await handle_suggestion_generation(history, mock_chat_model, mock_embeddings_model)
 
     assert isinstance(suggestions, list)
     assert len(suggestions) > 0
@@ -66,7 +66,7 @@ What's a good location for a corporate retreat?
 What's the ideal group size for team activities?
 </suggestions>"""
 
-    suggestions = await generate_suggestions(history, mock_chat_model, mock_embeddings_model)
+    suggestions = await handle_suggestion_generation(history, mock_chat_model, mock_embeddings_model)
 
     assert isinstance(suggestions, list)
     assert len(suggestions) > 0
@@ -78,7 +78,7 @@ async def test_generate_suggestions_error_handling(mock_chat_model, mock_embeddi
     history = [HumanMessage(content="Hello")]
     mock_chat_model.arun.side_effect = Exception("Model error")
 
-    suggestions = await generate_suggestions(history, mock_chat_model, mock_embeddings_model)
+    suggestions = await handle_suggestion_generation(history, mock_chat_model, mock_embeddings_model)
 
     assert isinstance(suggestions, list)
     assert len(suggestions) == 1

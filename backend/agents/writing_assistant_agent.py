@@ -75,7 +75,7 @@ class WritingAssistantAgent(AbstractAgent):
             "data": response
         }
 
-async def handle_writing_assistant(
+async def handle_writing_assistance(
     query: str,
     history: List[BaseMessage],
     llm: BaseChatModel,
