@@ -24,6 +24,56 @@ BASIC_SEARCH_RETRIEVER_PROMPT = """
 You are an AI question rephraser. You will be given a conversation and a follow-up question,  you will have to rephrase the follow up question so it is a standalone question and can be used by another LLM to search the web for information to answer it.
 If it is a smple writing task or a greeting (unless the greeting contains a question after it) like Hi, Hello, How are you, etc. than a question then you need to return `not_needed` as the response (This is because the LLM won't need to search the web for finding information on this topic).
 If the user asks some question from some URL or wants you to summarize a PDF or a webpage (via URL) you need to return the links inside the `links` XML block and the question inside the `question` XML block. If the user wants to you to summarize the webpage or the PDF you need to return `summarize` inside the `question` XML block in place of a question and the link to summarize in the `links` XML block.
+You must always return the rephrased question inside the `question` XML block, if there are no links in the follow-up question then don't insert a `links` XML block in your response.
+
+There are several examples attached for your reference inside the below `examples` XML block
+
+<examples>
+1. Follow up question: What is the capital of France
+Rephrased question:`
+<question>
+Capital of france
+</question>
+`
+
+2. Hi, how are you?
+Rephrased question`
+<question>
+not_needed
+</question>
+`
+
+3. Follow up question: What is Docker?
+Rephrased question: `
+<question>
+What is Docker
+</question>
+`
+
+4. Follow up question: Can you tell me what is X from https://example.com
+Rephrased question: `
+<question>
+Can you tell me what is X?
+</question>
+
+<links>
+https://example.com
+</links>
+`
+
+5. Follow up question: Summarize the content from https://example.com
+Rephrased question: `
+<question>
+summarize
+</question>
+
+<links>
+https://example.com
+</links>
+`
+</examples>
+
+Anything below is the part of the actual conversation and you need to use conversation and the follow-up question to rephrase the follow-up question as a standalone question based on the guidelines shared above.
 
 <conversation>
 {chat_history}
@@ -39,6 +89,10 @@ class WebSearchAgent(AbstractAgent):
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the web search retriever chain."""
         prompt = PromptTemplate.from_template(BASIC_SEARCH_RETRIEVER_PROMPT)
+
+        # Set temperature to 0 for more precise rephrasing
+        if hasattr(self.llm, "temperature"):
+            self.llm.temperature = 0
 
         chain = prompt | self.llm
 
@@ -87,8 +141,28 @@ class WebSearchAgent(AbstractAgent):
                                 - **Journalistic tone**: The summary should sound professional and journalistic, not too casual or vague.
                                 - **Thorough and detailed**: Ensure that every key point from the text is captured and that the summary directly answers the query.
                                 - **Not too lengthy, but detailed**: The summary should be informative but not excessively long. Focus on providing detailed information in a concise format.
-                                """),
-                                ("human", """
+
+                                The text will be shared inside the `text` XML tag, and the query inside the `query` XML tag.
+
+                                <example>
+                                <text>
+                                Docker is a set of platform-as-a-service products that use OS-level virtualization to deliver software in packages called containers. 
+                                It was first released in 2013 and is developed by Docker, Inc. Docker is designed to make it easier to create, deploy, and run applications 
+                                by using containers.
+                                </text>
+
+                                <query>
+                                What is Docker and how does it work?
+                                </query>
+
+                                Response:
+                                Docker is a revolutionary platform-as-a-service product developed by Docker, Inc., that uses container technology to make application 
+                                deployment more efficient. It allows developers to package their software with all necessary dependencies, making it easier to run in 
+                                any environment. Released in 2013, Docker has transformed the way applications are built, deployed, and managed.
+                                </example>
+
+                                Everything below is the actual data you will be working with. Good luck!
+
                                 <query>
                                 {query}
                                 </query>
@@ -98,7 +172,8 @@ class WebSearchAgent(AbstractAgent):
                                 </text>
 
                                 Make sure to answer the query in the summary.
-                                """)
+                                """),
+                                ("human", "{query}")
                             ])
 
                             summary_chain = summary_prompt | self.llm
@@ -216,17 +291,52 @@ class WebSearchAgent(AbstractAgent):
         Generate a response that is informative and relevant to the user's query based on provided context (the context consits of search results containing a brief description of the content of that page).
         You must use this context to answer the user's query in the best way possible. Use an unbaised and journalistic tone in your response. Do not repeat the text.
         You must not tell the user to open any link or visit any website to get the answer. You must provide the answer in the response itself. If the user asks for links you can provide them.
+        If the query contains some links and the user asks to answer from those links you will be provided the entire content of the page inside the `context` XML block. You can then use this content to answer the user's query.
+        If the user asks to summarize content from some links, you will be provided the entire content of the page inside the `context` XML block. You can then use this content to summarize the text. The content provided inside the `context` block will be already summarized by another model so you just need to use that content to answer the user's query.
         Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
         You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
         Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
+        However you do not need to cite it using the same number. You can use different numbers to cite the same sentence multiple times. The number refers to the number of the search result (passed in the context) used to generate that part of the answer.
+
+        Anything inside the following `context` HTML block provided below is for your knowledge returned by the search engine and is not shared by the user. You have to answer question on the basis of it and cite the relevant information from it but you do not have to
+        talk about the context in your response.
 
         <context>
         {context}
         </context>
 
-        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
+        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'. You do not need to do this for summarization tasks.
         Anything between the `context` is retrieved from a search engine and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
         """
+
+    async def rerank_docs(self, query: str, docs: List[Document]) -> List[Document]:
+        """Rerank documents based on relevance to query."""
+        if not docs:
+            return docs
+
+        if query.lower() == "summarize":
+            return docs
+
+        docs_with_content = [doc for doc in docs if doc.page_content and len(doc.page_content) > 0]
+
+        if self.optimization_mode == "speed":
+            return docs_with_content[:15]
+        elif self.optimization_mode == "balanced":
+            doc_embeddings = await self.embeddings.embed_documents([doc.page_content for doc in docs_with_content])
+            query_embedding = await self.embeddings.embed_query(query)
+
+            similarities = []
+            for i, doc_embedding in enumerate(doc_embeddings):
+                from utils.compute_similarity import compute_similarity
+                sim = compute_similarity(query_embedding, doc_embedding)
+                similarities.append({"index": i, "similarity": sim})
+
+            # Filter docs with similarity > 0.3 and take top 15
+            sorted_docs = sorted(similarities, key=lambda x: x["similarity"], reverse=True)
+            filtered_docs = [docs_with_content[s["index"]] for s in sorted_docs if s["similarity"] > 0.3][:15]
+            return filtered_docs
+
+        return docs
 
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the language model."""

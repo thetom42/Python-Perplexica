@@ -17,6 +17,7 @@ from langchain_core.output_parsers import StrOutputParser
 from lib.searxng import search_searxng
 from utils.logger import logger
 from agents.abstract_agent import AbstractAgent
+from utils.compute_similarity import compute_similarity
 
 BASIC_REDDIT_SEARCH_RETRIEVER_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question if needed so it is a standalone question that can be used by the LLM to search the web for information.
@@ -149,6 +150,10 @@ class RedditSearchAgent(AbstractAgent):
         Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
         You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
         Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
+        However you do not need to cite it using the same number. You can use different numbers to cite the same sentence multiple times. The number refers to the number of the search result (passed in the context) used to generate that part of the answer.
+
+        Anything inside the following `context` HTML block provided below is for your knowledge returned by Reddit and is not shared by the user. You have to answer question on the basis of it and cite the relevant information from it but you do not have to
+        talk about the context in your response.
 
         <context>
         {context}
@@ -157,6 +162,31 @@ class RedditSearchAgent(AbstractAgent):
         If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
         Anything between the `context` is retrieved from Reddit and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
         """
+
+    async def rerank_docs(self, query: str, docs: List[Document]) -> List[Document]:
+        """Rerank documents based on relevance to query."""
+        if not docs:
+            return docs
+
+        docs_with_content = [doc for doc in docs if doc.page_content and len(doc.page_content) > 0]
+
+        if self.optimization_mode == "speed":
+            return docs_with_content[:15]
+        elif self.optimization_mode == "balanced":
+            doc_embeddings = await self.embeddings.embed_documents([doc.page_content for doc in docs_with_content])
+            query_embedding = await self.embeddings.embed_query(query)
+
+            similarities = []
+            for i, doc_embedding in enumerate(doc_embeddings):
+                sim = compute_similarity(query_embedding, doc_embedding)
+                similarities.append({"index": i, "similarity": sim})
+
+            # Filter docs with similarity > 0.3 and take top 15
+            sorted_docs = sorted(similarities, key=lambda x: x["similarity"], reverse=True)
+            filtered_docs = [docs_with_content[s["index"]] for s in sorted_docs if s["similarity"] > 0.3][:15]
+            return filtered_docs
+
+        return docs
 
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the language model."""
