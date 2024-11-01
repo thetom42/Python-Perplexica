@@ -2,9 +2,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.suggestion_generator_agent import generate_suggestions
-from backend.lib.providers import get_available_chat_model_providers
-from backend.utils.logger import logger
+from agents.suggestion_generator_agent import generate_suggestions
+from lib.providers import get_available_chat_model_providers
+from utils.logger import logger
 from langchain.embeddings import OpenAIEmbeddings
 
 router = APIRouter()

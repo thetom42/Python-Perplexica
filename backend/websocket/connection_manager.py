@@ -1,8 +1,8 @@
 from fastapi import WebSocket
 from typing import List
 import json
-from backend.lib.providers import get_chat_model, get_embeddings_model
-from backend.agents.web_search_agent import handle_web_search
+from lib.providers import get_chat_model, get_embeddings_model
+from agents.web_search_agent import handle_web_search
 
 class ConnectionManager:
     def __init__(self):

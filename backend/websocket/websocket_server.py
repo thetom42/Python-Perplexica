@@ -1,6 +1,6 @@
 from fastapi import WebSocket, WebSocketDisconnect
 from typing import List
-from backend.websocket.message_handler import handle_message
+from websocket.message_handler import handle_message
 import logging
 
 logger = logging.getLogger(__name__)

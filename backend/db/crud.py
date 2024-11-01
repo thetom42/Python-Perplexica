@@ -6,7 +6,7 @@ on the Chat and Message models in the database.
 """
 
 from sqlalchemy.orm import Session
-from backend.db.models import Chat, Message
+from db.models import Chat, Message
 from datetime import datetime
 import uuid
 import json

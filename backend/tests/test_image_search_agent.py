@@ -1,11 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.image_search_agent import (
-    handle_image_search,
-    create_image_search_chain,
-    RunnableSequence
-)
+from agents.image_search_agent import handle_image_search, create_image_search_chain, RunnableSequence
 
 @pytest.fixture
 def mock_chat_model():

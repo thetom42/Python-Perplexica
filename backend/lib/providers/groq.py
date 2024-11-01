@@ -1,6 +1,6 @@
 from langchain_openai import ChatOpenAI
-from backend.config import get_groq_api_key
-from backend.utils.logger import logger
+from config import get_groq_api_key
+from utils.logger import logger
 
 async def load_groq_chat_models():
     api_key = get_groq_api_key()

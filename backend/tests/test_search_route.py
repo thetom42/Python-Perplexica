@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
-from backend.main import app
-from backend.routes.search import router as search_router
+from main import app
+from routes.search import router as search_router
 
 app.include_router(search_router, prefix="/api")
 

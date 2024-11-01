@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
-from backend.db.database import get_db
-from backend.db.models import Chat, Message
-from backend.utils.logger import logger
+from db.database import get_db
+from db.models import Chat, Message
+from utils.logger import logger
 
 router = APIRouter()
 

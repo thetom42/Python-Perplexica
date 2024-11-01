@@ -1,6 +1,6 @@
 from langchain_anthropic import ChatAnthropic
-from backend.config import get_anthropic_api_key
-from backend.utils.logger import logger
+from config import get_anthropic_api_key
+from utils.logger import logger
 
 async def load_anthropic_chat_models():
     api_key = get_anthropic_api_key()

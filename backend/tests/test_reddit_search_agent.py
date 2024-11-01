@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.reddit_search_agent import (
+from agents.reddit_search_agent import (
     handle_reddit_search,
     RedditSearchAgent
 )

@@ -11,10 +11,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import RunnableSequence, RunnablePassthrough
-from backend.utils.format_history import format_chat_history_as_string
-from backend.lib.output_parsers.list_line_output_parser import ListLineOutputParser
-from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent
+from utils.format_history import format_chat_history_as_string
+from lib.output_parsers.list_line_output_parser import ListLineOutputParser
+from utils.logger import logger
+from agents.abstract_agent import AbstractAgent
 
 SUGGESTION_GENERATOR_PROMPT = """
 You are an AI suggestion generator for an AI powered search engine. You will be given a conversation below. You need to generate 4-5 suggestions based on the conversation. The suggestion should be relevant to the conversation that can be used by the user to ask the chat model for more information.

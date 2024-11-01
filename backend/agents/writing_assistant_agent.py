@@ -12,8 +12,8 @@ from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableSequence
 from langchain_core.output_parsers import StrOutputParser
-from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent
+from utils.logger import logger
+from agents.abstract_agent import AbstractAgent
 
 WRITING_ASSISTANT_PROMPT = """
 You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are currently set on focus mode 'Writing Assistant', this means you will be helping the user write a response to a given query.

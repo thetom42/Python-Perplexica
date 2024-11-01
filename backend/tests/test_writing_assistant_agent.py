@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.writing_assistant_agent import (
+from agents.writing_assistant_agent import (
     handle_writing_assistant,
     create_writing_assistant_chain,
     RunnableSequence

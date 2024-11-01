@@ -7,7 +7,7 @@ It allows customization of search parameters and returns structured search resul
 
 import httpx
 from typing import Dict, Any, List
-from backend.config import get_searxng_api_endpoint
+from config import get_searxng_api_endpoint
 
 async def search_searxng(query: str, opts: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """

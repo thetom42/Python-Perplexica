@@ -3,18 +3,18 @@ from pydantic import BaseModel
 from typing import Dict, Any
 from langchain.chat_models.base import BaseChatModel
 from langchain.embeddings.base import Embeddings
-from backend.lib.providers import (
+from lib.providers import (
     get_available_chat_model_providers,
     get_available_embedding_model_providers
 )
-from backend.config import (
+from config import (
     get_openai_api_key,
     get_ollama_api_endpoint,
     get_anthropic_api_key,
     get_groq_api_key,
     update_config
 )
-from backend.utils.logger import logger
+from utils.logger import logger
 
 router = APIRouter()
 

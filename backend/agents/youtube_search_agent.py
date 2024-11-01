@@ -13,9 +13,9 @@ from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, PromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableSequence, RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-from backend.lib.searxng import search_searxng
-from backend.utils.logger import logger
-from backend.agents.abstract_agent import AbstractAgent
+from lib.searxng import search_searxng
+from utils.logger import logger
+from agents.abstract_agent import AbstractAgent
 
 BASIC_YOUTUBE_SEARCH_RETRIEVER_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question if needed so it is a standalone question that can be used by the LLM to search the web for information.

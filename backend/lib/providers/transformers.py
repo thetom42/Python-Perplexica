@@ -1,5 +1,5 @@
-from backend.lib.huggingface_transformer import HuggingFaceTransformersEmbeddings
-from backend.utils.logger import logger
+from lib.huggingface_transformer import HuggingFaceTransformersEmbeddings
+from utils.logger import logger
 
 async def load_transformers_embeddings_models():
     try:

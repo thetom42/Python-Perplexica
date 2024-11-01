@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from backend.main import app
-from backend.lib.providers import get_chat_model, get_embeddings_model
+from main import app
+from lib.providers import get_chat_model, get_embeddings_model
 from unittest.mock import patch, AsyncMock
 
 client = TestClient(app)

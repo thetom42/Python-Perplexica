@@ -1,7 +1,7 @@
 import json
 from fastapi import WebSocket
 from langchain.schema import BaseMessage, HumanMessage, AIMessage
-from backend.agents import (
+from agents import (
     handle_web_search,
     handle_academic_search,
     handle_image_search,
@@ -11,7 +11,7 @@ from backend.agents import (
     handle_writing_assistance,
     handle_youtube_search,
 )
-from backend.lib.providers import get_chat_model, get_embeddings_model
+from lib.providers import get_chat_model, get_embeddings_model
 
 #__all__ = ['search_handlers', 'handle_message', 'convert_to_base_message']
 

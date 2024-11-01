@@ -13,12 +13,12 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, PromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableSequence, RunnablePassthrough
-from backend.lib.searxng import search_searxng
-from backend.lib.link_document import get_documents_from_links
-from backend.utils.logger import logger
-from backend.lib.output_parsers.line_output_parser import LineOutputParser
-from backend.lib.output_parsers.list_line_output_parser import ListLineOutputParser
-from backend.agents.abstract_agent import AbstractAgent
+from lib.searxng import search_searxng
+from lib.link_document import get_documents_from_links
+from utils.logger import logger
+from lib.output_parsers.line_output_parser import LineOutputParser
+from lib.output_parsers.list_line_output_parser import ListLineOutputParser
+from agents.abstract_agent import AbstractAgent
 
 BASIC_SEARCH_RETRIEVER_PROMPT = """
 You are an AI question rephraser. You will be given a conversation and a follow-up question,  you will have to rephrase the follow up question so it is a standalone question and can be used by another LLM to search the web for information to answer it.

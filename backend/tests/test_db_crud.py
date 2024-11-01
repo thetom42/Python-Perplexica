@@ -1,8 +1,8 @@
 import pytest
 from sqlalchemy.orm import Session
-from backend.db import crud, models
-from backend.db.models import Base
-from backend.db.database import engine
+from db import crud, models
+from db.models import Base
+from db.database import engine
 
 @pytest.fixture(scope="module")
 def db():

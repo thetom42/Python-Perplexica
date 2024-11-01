@@ -1,7 +1,7 @@
 import redis
 from functools import wraps
 import json
-from backend.config import get_redis_url
+from config import get_redis_url
 
 redis_client = redis.Redis.from_url(get_redis_url())
 

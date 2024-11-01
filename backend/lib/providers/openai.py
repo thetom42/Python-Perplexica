@@ -1,7 +1,7 @@
 from langchain_openai.chat_models.base import ChatOpenAI
 from langchain_openai.embeddings.base import OpenAIEmbeddings
-from backend.config import get_openai_api_key
-from backend.utils.logger import logger
+from config import get_openai_api_key
+from utils.logger import logger
 
 async def load_openai_chat_models():
     api_key = get_openai_api_key()

@@ -6,9 +6,9 @@ from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.chat_models.base import BaseChatModel
 from langchain.embeddings.base import Embeddings
 from langchain.chat_models.openai import ChatOpenAI  # Fixed import
-from backend.lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
-from backend.websocket.message_handler import search_handlers  # This will be fixed in message_handler.py
-from backend.utils.logger import logger
+from lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
+from websocket.message_handler import search_handlers  # This will be fixed in message_handler.py
+from utils.logger import logger
 import json
 
 router = APIRouter()

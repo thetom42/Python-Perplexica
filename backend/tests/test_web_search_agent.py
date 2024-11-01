@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage, Document
-from backend.agents.web_search_agent import (
+from agents.web_search_agent import (
     handle_web_search,
     create_basic_web_search_retriever_chain,
     create_basic_web_search_answering_chain,
@@ -74,7 +74,7 @@ async def test_query_rephrasing_xml_format(mock_chat_model, mock_embeddings_mode
 
     with patch('backend.agents.web_search_agent.search_searxng') as mock_search, \
          patch('backend.lib.link_document.get_documents_from_links') as mock_get_docs:
-        
+
         mock_chat_model.arun.side_effect = [
             """
             <question>
@@ -87,14 +87,14 @@ async def test_query_rephrasing_xml_format(mock_chat_model, mock_embeddings_mode
             """,
             "Summary of the article"
         ]
-        
+
         mock_get_docs.return_value = [
             Document(
                 page_content="Article content",
                 metadata={"title": "Article", "url": "https://example.com/article"}
             )
         ]
-        
+
         mock_chat_model.agenerate.return_value.generations = [[MagicMock(text="Summarized content")]]
 
         async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
@@ -113,7 +113,7 @@ async def test_webpage_summarization(mock_chat_model, mock_embeddings_model):
                 metadata={"title": "Test Article", "url": "https://example.com/article"}
             )
         ]
-        
+
         mock_chat_model.arun.side_effect = [
             "<question>summarize</question>\n<links>https://example.com/article</links>",
             "Article summary"

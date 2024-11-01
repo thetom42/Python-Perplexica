@@ -1,7 +1,7 @@
 from typing import AsyncGenerator, Dict, Any
 from langchain.schema import HumanMessage, AIMessage
 
-from backend.lib.searxng import search_searxng
+from lib.searxng import search_searxng
 
 async def handle_image_search(
     query: str,

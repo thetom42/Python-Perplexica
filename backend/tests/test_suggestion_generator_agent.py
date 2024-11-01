@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.suggestion_generator_agent import generate_suggestions, SuggestionGeneratorAgent
+from agents.suggestion_generator_agent import generate_suggestions, SuggestionGeneratorAgent
 
 @pytest.fixture
 def mock_chat_model():

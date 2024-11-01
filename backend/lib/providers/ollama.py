@@ -1,8 +1,8 @@
 import aiohttp
 from langchain_ollama.chat_models import ChatOllama
 from langchain_ollama.embeddings import OllamaEmbeddings
-from backend.config import get_ollama_api_endpoint
-from backend.utils.logger import logger
+from config import get_ollama_api_endpoint
+from utils.logger import logger
 
 async def load_ollama_chat_models():
     base_url = get_ollama_api_endpoint()

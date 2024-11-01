@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage, Document
-from backend.agents.wolfram_alpha_search_agent import (
+from agents.wolfram_alpha_search_agent import (
     handle_wolfram_alpha_search,
     create_basic_wolfram_alpha_search_retriever_chain,
     create_basic_wolfram_alpha_search_answering_chain,

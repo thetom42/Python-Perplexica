@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage
-from backend.agents.video_search_agent import (
+from agents.video_search_agent import (
     handle_video_search,
     VideoSearchAgent
 )

@@ -1,10 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain.schema import HumanMessage, AIMessage, Document
-from backend.agents.academic_search_agent import (
-    handle_academic_search,
-    AcademicSearchAgent
-)
+from agents.academic_search_agent import handle_academic_search, AcademicSearchAgent
 
 @pytest.fixture
 def mock_chat_model():

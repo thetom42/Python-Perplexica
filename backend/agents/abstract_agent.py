@@ -13,9 +13,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import RunnableSequence
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
-from backend.utils.compute_similarity import compute_similarity
-from backend.utils.format_history import format_chat_history_as_string
-from backend.utils.logger import logger
+from utils.compute_similarity import compute_similarity
+from utils.format_history import format_chat_history_as_string
+from utils.logger import logger
 
 class AbstractAgent(ABC):
     """Abstract base class for all search agents."""

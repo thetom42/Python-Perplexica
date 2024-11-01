@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
-from backend.utils.compute_similarity import compute_similarity
-from backend.config import get_similarity_measure
+from utils.compute_similarity import compute_similarity
+from config import get_similarity_measure
 
 @pytest.fixture
 def mock_config(monkeypatch):
