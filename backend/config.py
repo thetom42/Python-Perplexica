@@ -9,7 +9,7 @@ import json
 import os
 from typing import Dict, Any, Union, List, cast
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key, find_dotenv
 from pydantic.types import SecretStr
 from langchain_core.utils.utils import convert_to_secret_str
 
@@ -229,3 +229,45 @@ def get_general_config() -> Dict[str, Union[str, int]]:
         "PORT": get_port(),
         "SIMILARITY_MEASURE": get_similarity_measure()
     }
+
+def update_config(config: Dict[str, Dict[str, Any]]) -> None:
+    """
+    Update configuration values in the .env file.
+    
+    This function updates the environment variables in the .env file while preserving
+    existing values that are not being updated. It handles nested configuration
+    structures by flattening them into environment variable format.
+    
+    Args:
+        config: Dictionary containing the configuration updates
+        
+    Example:
+        update_config({
+            'API_KEYS': {
+                'OPENAI': 'new-key'
+            }
+        })
+    """
+    env_file = find_dotenv()
+    if not env_file:
+        env_file = '.env'
+        Path(env_file).touch()
+
+    # Map of config sections to environment variable prefixes
+    section_mapping = {
+        'API_KEYS': '',  # No prefix for API keys
+        'API_ENDPOINTS': '',  # No prefix for endpoints
+        'GENERAL': ''  # No prefix for general settings
+    }
+
+    # Update environment variables
+    for section, values in config.items():
+        if isinstance(values, dict):
+            prefix = section_mapping.get(section, f"{section}_")
+            for key, value in values.items():
+                if value is not None and value != "":
+                    env_key = f"{prefix}{key}" if prefix else key
+                    set_key(env_file, env_key, str(value))
+
+    # Reload environment variables
+    load_dotenv(override=True)

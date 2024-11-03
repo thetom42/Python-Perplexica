@@ -1,53 +1,72 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-from langchain.schema import HumanMessage, AIMessage
+"""
+Suggestions route handlers.
+
+This module provides endpoints for generating suggestions based on chat history
+and user interactions.
+"""
+
+from fastapi import APIRouter
+from typing import Dict, List
+from .shared.requests import BaseLLMRequest
+from .shared.responses import SuggestionResponse
+from .shared.utils import convert_chat_history, setup_llm_and_embeddings
+from .shared.exceptions import ServerError
 from agents.suggestion_generator_agent import handle_suggestion_generation
-from providers import get_available_chat_model_providers
 from utils.logger import logger
-from langchain.embeddings import OpenAIEmbeddings
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/suggestions",
+    tags=["suggestions"],
+    responses={
+        422: {"description": "Validation error"},
+        500: {"description": "Internal server error"},
+    }
+)
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
 
-class SuggestionRequest(BaseModel):
-    chat_history: List[ChatMessage]
-    chat_model: Optional[str] = None
-    chat_model_provider: Optional[str] = None
-
-@router.post("/")
-async def generate_suggestions_route(request: SuggestionRequest) -> Dict[str, List[str]]:
+@router.post(
+    "/",
+    response_model=SuggestionResponse,
+    description="Generate suggestions based on chat history",
+    responses={
+        200: {
+            "description": "Successfully generated suggestions",
+            "model": SuggestionResponse
+        }
+    }
+)
+async def generate_suggestions(request: BaseLLMRequest) -> SuggestionResponse:
+    """
+    Generate suggestions based on chat history.
+    
+    This endpoint analyzes the provided chat history and generates relevant
+    suggestions for continuing the conversation or exploring related topics.
+    
+    Args:
+        request: BaseLLMRequest containing chat history and model configuration
+        
+    Returns:
+        SuggestionResponse containing list of suggestions
+        
+    Raises:
+        ServerError: If an error occurs during suggestion generation
+    """
     try:
-        chat_history = [
-            HumanMessage(content=msg.content) if msg.role == 'user' else AIMessage(content=msg.content)
-            for msg in request.chat_history
-        ]
+        chat_history = convert_chat_history(request.history)
+        llm, embeddings = await setup_llm_and_embeddings(
+            request.chat_model,
+            request.embedding_model
+        )
 
-        chat_models = await get_available_chat_model_providers()
-        provider = request.chat_model_provider or next(iter(chat_models))
-        chat_model = request.chat_model or next(iter(chat_models[provider]))
-
-        llm = None
-        if provider in chat_models and chat_model in chat_models[provider]:
-            llm = chat_models[provider][chat_model].model
-
-        if not llm:
-            raise HTTPException(status_code=500, detail="Invalid LLM model selected")
-
-        embeddings = OpenAIEmbeddings()
         suggestions = await handle_suggestion_generation(
             history=chat_history,
             llm=llm,
             embeddings=embeddings,
-            optimization_mode="balanced"
+            optimization_mode=str(request.optimization_mode)  # Convert enum to string
         )
 
-        return {"suggestions": suggestions}
-    except HTTPException:
-        raise
+        return SuggestionResponse(suggestions=suggestions)
+
     except Exception as e:
         logger.error("Error in generating suggestions: %s", str(e))
-        raise HTTPException(status_code=500, detail="An error has occurred.") from e
+        raise ServerError() from e
