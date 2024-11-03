@@ -6,7 +6,7 @@ from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.chat_models.base import BaseChatModel
 from langchain.embeddings.base import Embeddings
 from langchain.chat_models.openai import ChatOpenAI  # Fixed import
-from lib.providers import get_available_chat_model_providers, get_available_embedding_model_providers
+from providers import get_available_chat_model_providers, get_available_embedding_model_providers
 from websocket.message_handler import search_handlers  # This will be fixed in message_handler.py
 from utils.logger import logger
 import json
@@ -59,8 +59,8 @@ async def search(body: ChatRequestBody):
                 raise HTTPException(status_code=400, detail="Missing custom OpenAI base URL or key")
 
             llm = ChatOpenAI(
-                model_name=body.chatModel.model,
-                openai_api_key=body.chatModel.customOpenAIKey,
+                name=body.chatModel.model,
+                api_key=body.chatModel.customOpenAIKey,
                 temperature=0.7,
                 base_url=body.chatModel.customOpenAIBaseURL,
             )

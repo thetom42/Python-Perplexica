@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from langchain.schema import HumanMessage, AIMessage
 from agents.suggestion_generator_agent import handle_suggestion_generation
-from lib.providers import get_available_chat_model_providers
+from providers import get_available_chat_model_providers
 from utils.logger import logger
 from langchain.embeddings import OpenAIEmbeddings
 

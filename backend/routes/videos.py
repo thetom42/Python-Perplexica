@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from langchain.schema import HumanMessage, AIMessage
 from agents.video_search_agent import handle_video_search
-from lib.providers import get_available_chat_model_providers
+from providers import get_available_chat_model_providers
 from utils.logger import logger
 from langchain.embeddings import OpenAIEmbeddings  # Add this import
 
