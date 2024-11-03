@@ -10,6 +10,8 @@ import os
 from typing import Dict, Any, Union, List, cast
 from pathlib import Path
 from dotenv import load_dotenv
+from pydantic.types import SecretStr
+from langchain_core.utils.utils import convert_to_secret_str
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,32 +37,32 @@ def get_similarity_measure() -> str:
     """
     return os.getenv("SIMILARITY_MEASURE", "cosine")
 
-def get_openai_api_key() -> str:
+def get_openai_api_key() -> SecretStr:
     """
     Get the OpenAI API key from the configuration.
 
     Returns:
         str: The OpenAI API key.
     """
-    return os.getenv("OPENAI_API_KEY", "")
+    return convert_to_secret_str(os.getenv("OPENAI_API_KEY", ""))
 
-def get_groq_api_key() -> str:
+def get_groq_api_key() -> SecretStr:
     """
     Get the Groq API key from the configuration.
 
     Returns:
         str: The Groq API key.
     """
-    return os.getenv("GROQ_API_KEY", "")
+    return convert_to_secret_str(os.getenv("GROQ_API_KEY", ""))
 
-def get_anthropic_api_key() -> str:
+def get_anthropic_api_key() -> SecretStr:
     """
     Get the Anthropic API key from the configuration.
 
     Returns:
         str: The Anthropic API key.
     """
-    return os.getenv("ANTHROPIC_API_KEY", "")
+    return convert_to_secret_str(os.getenv("ANTHROPIC_API_KEY", ""))
 
 def get_searxng_api_endpoint() -> str:
     """
@@ -130,7 +132,7 @@ def get_cors_origins() -> List[str]:
     except json.JSONDecodeError:
         return ["*"]
 
-def get_api_keys() -> Dict[str, str]:
+def get_api_keys() -> Dict[str, Any]:
     """
     Get all API keys from the configuration.
 

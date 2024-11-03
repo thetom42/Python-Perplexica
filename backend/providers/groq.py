@@ -12,8 +12,8 @@ async def load_groq_chat_models():
             'llama-3.2-3b-preview': {
                 'displayName': 'Llama 3.2 3B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama-3.2-3b-preview',
+                    api_key=api_key,
+                    name='llama-3.2-3b-preview',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -21,8 +21,8 @@ async def load_groq_chat_models():
             'llama-3.2-11b-text-preview': {
                 'displayName': 'Llama 3.2 11B Text',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama-3.2-11b-text-preview',
+                    api_key=api_key,
+                    name='llama-3.2-11b-text-preview',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -30,8 +30,8 @@ async def load_groq_chat_models():
             'llama-3.2-90b-text-preview': {
                 'displayName': 'Llama 3.2 90B Text',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama-3.2-90b-text-preview',
+                    api_key=api_key,
+                    name='llama-3.2-90b-text-preview',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -39,8 +39,8 @@ async def load_groq_chat_models():
             'llama-3.1-70b-versatile': {
                 'displayName': 'Llama 3.1 70B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama-3.1-70b-versatile',
+                    api_key=api_key,
+                    name='llama-3.1-70b-versatile',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -48,26 +48,26 @@ async def load_groq_chat_models():
             'llama-3.1-8b-instant': {
                 'displayName': 'Llama 3.1 8B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama-3.1-8b-instant',
+                    api_key=api_key,
+                    name='llama-3.1-8b-instant',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
             },
             'llama3-8b-8192': {
-                'displayName': 'LLaMA3 8B',
+                'displayName': 'LLama3 8B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama3-8b-8192',
+                    api_key=api_key,
+                    name='llama3-8b-8192',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
             },
             'llama3-70b-8192': {
-                'displayName': 'LLaMA3 70B',
+                'displayName': 'LLama3 70B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='llama3-70b-8192',
+                    api_key=api_key,
+                    name='llama3-70b-8192',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -75,8 +75,8 @@ async def load_groq_chat_models():
             'mixtral-8x7b-32768': {
                 'displayName': 'Mixtral 8x7B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='mixtral-8x7b-32768',
+                    api_key=api_key,
+                    name='mixtral-8x7b-32768',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -84,8 +84,8 @@ async def load_groq_chat_models():
             'gemma-7b-it': {
                 'displayName': 'Gemma 7B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='gemma-7b-it',
+                    api_key=api_key,
+                    name='gemma-7b-it',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),
@@ -93,8 +93,8 @@ async def load_groq_chat_models():
             'gemma2-9b-it': {
                 'displayName': 'Gemma2 9B',
                 'model': ChatOpenAI(
-                    openai_api_key=api_key,
-                    model='gemma2-9b-it',
+                    api_key=api_key,
+                    name='gemma2-9b-it',
                     temperature=0.7,
                     base_url='https://api.groq.com/openai/v1'
                 ),

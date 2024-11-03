@@ -12,33 +12,41 @@ async def load_anthropic_chat_models():
             'claude-3-5-sonnet-20240620': {
                 'displayName': 'Claude 3.5 Sonnet',
                 'model': ChatAnthropic(
+                    api_key=api_key,
+                    model_name='claude-3-5-sonnet-20240620',
                     temperature=0.7,
-                    anthropic_api_key=api_key,
-                    model='claude-3-5-sonnet-20240620',
+                    timeout=60,
+                    stop=['\n'],
                 ),
             },
             'claude-3-opus-20240229': {
                 'displayName': 'Claude 3 Opus',
                 'model': ChatAnthropic(
+                    api_key=api_key,
+                    model_name='claude-3-opus-20240229',
                     temperature=0.7,
-                    anthropic_api_key=api_key,
-                    model='claude-3-opus-20240229',
+                    timeout=60,
+                    stop=['\n'],
                 ),
             },
             'claude-3-sonnet-20240229': {
                 'displayName': 'Claude 3 Sonnet',
                 'model': ChatAnthropic(
+                    api_key=api_key,
+                    model_name='claude-3-sonnet-20240229',
                     temperature=0.7,
-                    anthropic_api_key=api_key,
-                    model='claude-3-sonnet-20240229',
+                    timeout=60,
+                    stop=['\n'],
                 ),
             },
             'claude-3-haiku-20240307': {
                 'displayName': 'Claude 3 Haiku',
                 'model': ChatAnthropic(
+                    api_key=api_key,
+                    model_name='claude-3-haiku-20240307',
                     temperature=0.7,
-                    anthropic_api_key=api_key,
-                    model='claude-3-haiku-20240307',
+                    timeout=60,
+                    stop=['\n'],
                 ),
             },
         }

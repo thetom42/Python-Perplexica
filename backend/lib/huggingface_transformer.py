@@ -36,7 +36,7 @@ class HuggingFaceTransformersEmbeddings(Embeddings):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: List[str]) -> Any: # List[List[float]]:
         """
         Embed a list of documents.
 
@@ -48,7 +48,7 @@ class HuggingFaceTransformersEmbeddings(Embeddings):
         """
         return self._run_embedding(texts)
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> Any: # List[float]:
         """
         Embed a single query.
 
@@ -60,7 +60,7 @@ class HuggingFaceTransformersEmbeddings(Embeddings):
         """
         return self._run_embedding([text])[0]
 
-    def _run_embedding(self, texts: List[str]) -> List[List[float]]:
+    def _run_embedding(self, texts: List[str]) -> Any: # List[List[float]]:
         """
         Generate embeddings for a list of texts.
 
@@ -97,4 +97,4 @@ class HuggingFaceTransformersEmbeddings(Embeddings):
         Returns:
             int: The dimension of the embeddings produced by the model.
         """
-        return self.model.config.hidden_size
+        return int(self.model.config.hidden_size)
