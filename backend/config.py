@@ -1,273 +1,147 @@
-"""
-Configuration module for the Perplexica backend.
+"""Configuration module for loading and managing application settings."""
 
-This module provides functions to load and retrieve configuration settings
-from environment variables.
-"""
-
-import json
 import os
-from typing import Dict, Any, Union, List, cast
 from pathlib import Path
-from dotenv import load_dotenv, set_key, find_dotenv
-from pydantic.types import SecretStr
-from langchain_core.utils.utils import convert_to_secret_str
+from typing import TypedDict, Any, cast, Literal, NotRequired, Dict
+import tomli
+import tomli_w
 
-# Load environment variables from .env file
-load_dotenv()
+
+CONFIG_FILENAME = 'config.toml'
+
+
+class GeneralConfig(TypedDict):
+    """Type definition for general configuration settings."""
+    PORT: int  # Port to run the server on
+    SIMILARITY_MEASURE: str  # "cosine" or "dot"
+
+
+class ApiKeysConfig(TypedDict):
+    """Type definition for API key configuration settings."""
+    OPENAI: str  # OpenAI API key
+    GROQ: str  # Groq API key
+    ANTHROPIC: str  # Anthropic API key
+
+
+class ApiEndpointsConfig(TypedDict):
+    """Type definition for API endpoint configuration settings."""
+    SEARXNG: str  # SearxNG API URL
+    OLLAMA: str  # Ollama API URL
+
+
+class Config(TypedDict):
+    """Type definition for the complete configuration."""
+    GENERAL: GeneralConfig
+    API_KEYS: ApiKeysConfig
+    API_ENDPOINTS: ApiEndpointsConfig
+
+
+# Type for configuration section keys
+ConfigKey = Literal['GENERAL', 'API_KEYS', 'API_ENDPOINTS']
+
+
+# Partial versions of the config types for updates
+class PartialGeneralConfig(TypedDict, total=False):
+    """Partial type definition for general configuration settings."""
+    PORT: NotRequired[int]
+    SIMILARITY_MEASURE: NotRequired[str]
+
+
+class PartialApiKeysConfig(TypedDict, total=False):
+    """Partial type definition for API key configuration settings."""
+    OPENAI: NotRequired[str]
+    GROQ: NotRequired[str]
+    ANTHROPIC: NotRequired[str]
+
+
+class PartialApiEndpointsConfig(TypedDict, total=False):
+    """Partial type definition for API endpoint configuration settings."""
+    SEARXNG: NotRequired[str]
+    OLLAMA: NotRequired[str]
+
+
+class PartialConfig(TypedDict, total=False):
+    """Partial type definition for the complete configuration."""
+    GENERAL: NotRequired[PartialGeneralConfig]
+    API_KEYS: NotRequired[PartialApiKeysConfig]
+    API_ENDPOINTS: NotRequired[PartialApiEndpointsConfig]
+
+
+def _get_config_path() -> Path:
+    """Get the path to the config file."""
+    return Path(__file__).parent.parent / CONFIG_FILENAME
+
+
+def load_config() -> Config:
+    """Load the configuration from the TOML file."""
+    try:
+        with open(_get_config_path(), 'rb') as f:
+            return cast(Config, tomli.load(f))
+    except Exception as e:
+        raise RuntimeError(f"Failed to load config: {str(e)}") from e
+
 
 def get_port() -> int:
-    """
-    Get the port number from the configuration.
+    """Get the port number from configuration."""
+    return load_config()['GENERAL']['PORT']
 
-    Returns:
-        int: The port number.
-    """
-    try:
-        return int(os.getenv("PORT", "8000"))
-    except ValueError:
-        return 8000  # default port
 
 def get_similarity_measure() -> str:
-    """
-    Get the similarity measure from the configuration.
+    """Get the similarity measure from configuration."""
+    return load_config()['GENERAL']['SIMILARITY_MEASURE']
 
-    Returns:
-        str: The similarity measure.
-    """
-    return os.getenv("SIMILARITY_MEASURE", "cosine")
 
-def get_openai_api_key() -> SecretStr:
-    """
-    Get the OpenAI API key from the configuration.
+def get_openai_api_key() -> str:
+    """Get the OpenAI API key from configuration."""
+    return load_config()['API_KEYS']['OPENAI']
 
-    Returns:
-        str: The OpenAI API key.
-    """
-    return convert_to_secret_str(os.getenv("OPENAI_API_KEY", ""))
 
-def get_groq_api_key() -> SecretStr:
-    """
-    Get the Groq API key from the configuration.
+def get_groq_api_key() -> str:
+    """Get the Groq API key from configuration."""
+    return load_config()['API_KEYS']['GROQ']
 
-    Returns:
-        str: The Groq API key.
-    """
-    return convert_to_secret_str(os.getenv("GROQ_API_KEY", ""))
 
-def get_anthropic_api_key() -> SecretStr:
-    """
-    Get the Anthropic API key from the configuration.
+def get_anthropic_api_key() -> str:
+    """Get the Anthropic API key from configuration."""
+    return load_config()['API_KEYS']['ANTHROPIC']
 
-    Returns:
-        str: The Anthropic API key.
-    """
-    return convert_to_secret_str(os.getenv("ANTHROPIC_API_KEY", ""))
 
 def get_searxng_api_endpoint() -> str:
-    """
-    Get the SearXNG API endpoint from the configuration.
+    """Get the SearXNG API endpoint from configuration or environment variable."""
+    return os.getenv('SEARXNG_API_URL') or load_config()['API_ENDPOINTS']['SEARXNG']
 
-    Returns:
-        str: The SearXNG API endpoint.
-    """
-    return os.getenv("SEARXNG_API_ENDPOINT", "")
 
 def get_ollama_api_endpoint() -> str:
-    """
-    Get the Ollama API endpoint from the configuration.
+    """Get the Ollama API endpoint from configuration."""
+    return load_config()['API_ENDPOINTS']['OLLAMA']
 
-    Returns:
-        str: The Ollama API endpoint.
-    """
-    return os.getenv("OLLAMA_API_ENDPOINT", "")
 
-def get_wolfram_alpha_app_id() -> str:
+def update_config(new_config: PartialConfig) -> None:
     """
-    Get the Wolfram Alpha App ID from the configuration.
-
-    Returns:
-        str: The Wolfram Alpha App ID, or an empty string if not set.
-    """
-    return os.getenv("WOLFRAM_ALPHA_APP_ID", "")
-
-def get_database_url() -> str:
-    """
-    Get the database URL from the configuration.
-
-    Returns:
-        str: The database URL, defaulting to a local SQLite database if not set.
-    """
-    return os.getenv("DATABASE_URL", "sqlite:///./perplexica.db")
-
-def get_redis_url() -> str:
-    """
-    Get the Redis URL from the configuration.
-
-    Returns:
-        str: The Redis URL, defaulting to a local Redis instance if not set.
-    """
-    return os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
-def get_log_level() -> str:
-    """
-    Get the logging level from the configuration.
-
-    Returns:
-        str: The logging level, defaulting to "INFO" if not set.
-    """
-    return os.getenv("LOG_LEVEL", "INFO")
-
-def get_cors_origins() -> List[str]:
-    """
-    Get the CORS origins from the configuration.
-
-    Returns:
-        list: A list of allowed CORS origins, defaulting to ["*"] if not set.
-    """
-    cors_origins = os.getenv("CORS_ORIGINS", '["*"]')
-    try:
-        origins: List[str] = json.loads(cors_origins)
-        return origins
-    except json.JSONDecodeError:
-        return ["*"]
-
-def get_api_keys() -> Dict[str, Any]:
-    """
-    Get all API keys from the configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing all API keys.
-    """
-    return {
-        "OPENAI": get_openai_api_key(),
-        "GROQ": get_groq_api_key(),
-        "ANTHROPIC": get_anthropic_api_key(),
-        "WOLFRAM_ALPHA": get_wolfram_alpha_app_id()
-    }
-
-def get_api_endpoints() -> Dict[str, str]:
-    """
-    Get all API endpoints from the configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing all API endpoints.
-    """
-    return {
-        "SEARXNG": get_searxng_api_endpoint(),
-        "OLLAMA": get_ollama_api_endpoint()
-    }
-
-def get_database_config() -> Dict[str, str]:
-    """
-    Get the database configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the database configuration.
-    """
-    return {"URL": get_database_url()}
-
-def get_cache_config() -> Dict[str, str]:
-    """
-    Get the cache configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the cache configuration.
-    """
-    return {"REDIS_URL": get_redis_url()}
-
-def get_logging_config() -> Dict[str, str]:
-    """
-    Get the logging configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the logging configuration.
-    """
-    return {"LEVEL": get_log_level()}
-
-def get_security_config() -> Dict[str, List[str]]:
-    """
-    Get the security configuration.
-
-    Returns:
-        Dict[str, List[str]]: A dictionary containing the security configuration.
-    """
-    return {"CORS_ORIGINS": get_cors_origins()}
-
-def get_chat_model() -> Dict[str, str]:
-    """
-    Get the chat model configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the chat model configuration.
-    """
-    return {
-        "PROVIDER": os.getenv("CHAT_MODEL_PROVIDER", "openai"),
-        "NAME": os.getenv("CHAT_MODEL_NAME", "gpt-3.5-turbo")
-    }
-
-def get_embedding_model() -> Dict[str, str]:
-    """
-    Get the embedding model configuration.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the embedding model configuration.
-    """
-    return {
-        "PROVIDER": os.getenv("EMBEDDING_MODEL_PROVIDER", "openai"),
-        "NAME": os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-ada-002")
-    }
-
-def get_general_config() -> Dict[str, Union[str, int]]:
-    """
-    Get the general configuration.
-
-    Returns:
-        Dict[str, Union[str, int]]: A dictionary containing the general configuration.
-    """
-    return {
-        "PORT": get_port(),
-        "SIMILARITY_MEASURE": get_similarity_measure()
-    }
-
-def update_config(config: Dict[str, Dict[str, Any]]) -> None:
-    """
-    Update configuration values in the .env file.
-    
-    This function updates the environment variables in the .env file while preserving
-    existing values that are not being updated. It handles nested configuration
-    structures by flattening them into environment variable format.
+    Update the configuration file with new values while preserving existing ones.
     
     Args:
-        config: Dictionary containing the configuration updates
-        
-    Example:
-        update_config({
-            'API_KEYS': {
-                'OPENAI': 'new-key'
-            }
-        })
+        new_config: Dictionary containing the new configuration values.
     """
-    env_file = find_dotenv()
-    if not env_file:
-        env_file = '.env'
-        Path(env_file).touch()
+    current_config = load_config()
+    sections: list[ConfigKey] = ['GENERAL', 'API_KEYS', 'API_ENDPOINTS']
 
-    # Map of config sections to environment variable prefixes
-    section_mapping = {
-        'API_KEYS': '',  # No prefix for API keys
-        'API_ENDPOINTS': '',  # No prefix for endpoints
-        'GENERAL': ''  # No prefix for general settings
-    }
+    # Create a new dictionary that will be written to TOML
+    toml_config: Dict[str, Dict[str, Any]] = {}
 
-    # Update environment variables
-    for section, values in config.items():
-        if isinstance(values, dict):
-            prefix = section_mapping.get(section, f"{section}_")
-            for key, value in values.items():
-                if value is not None and value != "":
-                    env_key = f"{prefix}{key}" if prefix else key
-                    set_key(env_file, env_key, str(value))
+    # Copy current config and merge with new values
+    for section in sections:
+        toml_config[section] = dict(current_config[section])
+        if section in new_config and isinstance(new_config.get(section), dict):
+            new_section = new_config.get(section, {})
+            if new_section:
+                for key, value in new_section.items():
+                    if value is not None:
+                        toml_config[section][key] = value
 
-    # Reload environment variables
-    load_dotenv(override=True)
+    # Write the updated configuration
+    try:
+        with open(_get_config_path(), 'wb') as f:
+            tomli_w.dump(toml_config, f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to update config: {str(e)}") from e

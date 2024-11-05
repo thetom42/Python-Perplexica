@@ -1,27 +1,50 @@
 """
 Search route handlers.
 
-This module provides the search endpoints that support different types of searches
-(web, academic, image, etc.) with streaming responses.
+This module provides endpoints for performing searches with different models and modes.
 """
 
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
-from .shared.enums import FocusMode, OptimizationMode
-from .shared.requests import SearchRequest
-from .shared.responses import StreamResponse
-from .shared.utils import convert_chat_history, setup_llm_and_embeddings
-from .shared.exceptions import InvalidInputError, ServerError
+from typing import List, Optional, Dict, Any, Tuple, Union
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from langchain.chat_models.base import BaseChatModel
+from langchain.embeddings.base import Embeddings
+from langchain.chat_models import ChatOpenAI
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
+from providers import get_available_chat_model_providers, get_available_embedding_model_providers
 from websocket.message_handler import search_handlers
 from utils.logger import logger
-import json
+
+
+class ChatModel(BaseModel):
+    provider: str
+    model: str
+    customOpenAIBaseURL: Optional[str] = None
+    customOpenAIKey: Optional[str] = None
+
+
+class EmbeddingModel(BaseModel):
+    provider: str
+    model: str
+
+
+class SearchRequest(BaseModel):
+    optimizationMode: str = "balanced"
+    focusMode: str
+    chatModel: Optional[ChatModel] = None
+    embeddingModel: Optional[EmbeddingModel] = None
+    query: str
+    history: List[Tuple[str, str]] = []
+
+
+class SearchResponse(BaseModel):
+    message: str
+    sources: List[Dict[str, Any]]
+
 
 router = APIRouter(
-    prefix="/search",
     tags=["search"],
     responses={
-        400: {"description": "Invalid request parameters"},
-        422: {"description": "Validation error"},
         500: {"description": "Internal server error"},
     }
 )
@@ -29,92 +52,113 @@ router = APIRouter(
 
 @router.post(
     "/",
-    response_class=StreamingResponse,
-    description="Perform a search based on the specified focus mode and query",
+    response_model=SearchResponse,
+    description="Perform a search based on query",
     responses={
         200: {
-            "description": "Successful search",
-            "content": {
-                "text/event-stream": {
-                    "example": 'data: {"type": "response", "data": "Search result"}\n'
-                }
-            }
+            "description": "Search results with sources",
+            "model": SearchResponse
         }
     }
 )
-async def search(body: SearchRequest) -> StreamingResponse:
+async def search(body: SearchRequest) -> SearchResponse:
     """
-    Perform a search based on the specified focus mode and query.
-    
-    The search is performed asynchronously and results are streamed back to the client
-    using server-sent events (SSE). The response includes both the search results and
-    any relevant sources.
+    Perform a search based on the specified parameters.
     
     Args:
-        body: SearchRequest containing the search parameters
+        body: SearchRequest containing search parameters
         
     Returns:
-        StreamingResponse: Server-sent events stream containing search results
+        SearchResponse containing results and sources
         
     Raises:
-        InvalidInputError: If the query is empty or focus mode is invalid
-        ServerError: If an internal error occurs during search
+        HTTPException: If an error occurs during search
     """
     try:
-        if not body.query:
-            raise InvalidInputError("Query cannot be empty")
+        if not body.focusMode or not body.query:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing focus mode or query"
+            )
 
-        history = convert_chat_history(body.history)
-        llm, embeddings = await setup_llm_and_embeddings(
-            body.chat_model,
-            body.embedding_model
-        )
+        # Convert history to LangChain messages
+        history: List[BaseMessage] = [
+            HumanMessage(content=msg[1]) if msg[0] == "human"
+            else AIMessage(content=msg[1])
+            for msg in body.history
+        ]
 
-        search_handler = search_handlers.get(str(body.focus_mode))
-        if not search_handler:
-            raise InvalidInputError(f"Invalid focus mode: {body.focus_mode}")
+        # Get available models
+        chat_models = await get_available_chat_model_providers()
+        embedding_models = await get_available_embedding_model_providers()
 
-        async def event_stream():
-            message = ""
-            sources = []
+        # Get chat model
+        chat_provider = body.chatModel.provider if body.chatModel else next(iter(chat_models))
+        chat_model_name = body.chatModel.model if body.chatModel else next(iter(chat_models[chat_provider]))
 
-            async for data in search_handler(
-                body.query,
-                history,
-                llm,
-                embeddings,
-                str(body.optimization_mode)  # Convert enum to string
-            ):
-                parsed_data = json.loads(data)
-                response = StreamResponse(
-                    type=parsed_data["type"],
-                    data=parsed_data["data"]
+        # Get embedding model
+        embedding_provider = body.embeddingModel.provider if body.embeddingModel else next(iter(embedding_models))
+        embedding_model_name = body.embeddingModel.model if body.embeddingModel else next(iter(embedding_models[embedding_provider]))
+
+        # Setup LLM
+        llm: Optional[BaseChatModel] = None
+        if body.chatModel and body.chatModel.provider == "custom_openai":
+            if not body.chatModel.customOpenAIBaseURL or not body.chatModel.customOpenAIKey:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing custom OpenAI base URL or key"
                 )
-                
-                if response.type == "response":
-                    message += response.data
-                    yield json.dumps(response.dict()) + "\n"
-                elif response.type == "sources":
-                    sources = response.data
-                    yield json.dumps(response.dict()) + "\n"
+            llm = ChatOpenAI(
+                model_name=body.chatModel.model,
+                openai_api_key=body.chatModel.customOpenAIKey,
+                temperature=0.7,
+                openai_api_base=body.chatModel.customOpenAIBaseURL
+            )
+        elif chat_provider in chat_models and chat_model_name in chat_models[chat_provider]:
+            llm = chat_models[chat_provider][chat_model_name].model
 
-            yield json.dumps(
-                StreamResponse(
-                    type="end",
-                    data={
-                        "message": message,
-                        "sources": sources
-                    }
-                ).dict()
-            ) + "\n"
+        # Setup embeddings
+        embeddings: Optional[Embeddings] = None
+        if embedding_provider in embedding_models and embedding_model_name in embedding_models[embedding_provider]:
+            embeddings = embedding_models[embedding_provider][embedding_model_name].model
 
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream"
-        )
+        if not llm or not embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid model selected"
+            )
 
-    except InvalidInputError:
+        # Get search handler
+        search_handler = search_handlers.get(body.focusMode)
+        if not search_handler:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid focus mode"
+            )
+
+        # Perform search
+        message = ""
+        sources = []
+        async for data in search_handler(
+            body.query,
+            history,
+            llm,
+            embeddings,
+            body.optimizationMode
+        ):
+            parsed_data = data if isinstance(data, dict) else {}
+            if parsed_data.get("type") == "response":
+                message += parsed_data.get("data", "")
+            elif parsed_data.get("type") == "sources":
+                sources = parsed_data.get("data", [])
+
+        return SearchResponse(message=message, sources=sources)
+
+    except HTTPException:
         raise
     except Exception as e:
         logger.error("Error in search: %s", str(e))
-        raise ServerError() from e
+        raise HTTPException(
+            status_code=500,
+            detail="An error has occurred."
+        )

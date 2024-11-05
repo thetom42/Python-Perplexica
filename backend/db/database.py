@@ -6,7 +6,7 @@ It also provides a function to get a database session.
 """
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./perplexica.db"
@@ -16,7 +16,7 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def get_db() -> Generator:
+def get_db() -> Generator[Session, None, None]:
     """
     Create and yield a database session.
 
@@ -24,7 +24,7 @@ def get_db() -> Generator:
     and then closed once the request is finished.
 
     Yields:
-        Generator: A SQLAlchemy SessionLocal object.
+        Session: A SQLAlchemy Session object.
     """
     db = SessionLocal()
     try:

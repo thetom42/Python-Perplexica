@@ -1,84 +1,149 @@
 """
 Image search route handlers.
 
-This module provides endpoints for searching images based on queries and chat history.
+This module provides endpoints for performing image searches using various
+language models and processing the results.
 """
 
-from fastapi import APIRouter, Depends
-from typing import List
-from langchain.schema import HumanMessage, AIMessage
+from typing import List, Dict, Any, Optional, cast, TypedDict
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
+
+from providers import get_available_chat_model_providers
 from agents.image_search_agent import handle_image_search
-from .shared.requests import ImageSearchRequest
-from .shared.responses import StreamResponse
-from .shared.utils import convert_chat_history, setup_llm_and_embeddings
-from .shared.exceptions import InvalidInputError, ServerError
-from .config import get_chat_model, get_embeddings_model
 from utils.logger import logger
 
+
+class ChatMessage(BaseModel):
+    """Chat message model."""
+    role: str
+    content: str
+
+
+class ImageSearchRequest(BaseModel):
+    """Image search request model."""
+    query: str
+    chat_history: List[ChatMessage]
+    chat_model_provider: Optional[str] = None
+    chat_model: Optional[str] = None
+
+
+class ImageResult(BaseModel):
+    """Image result model."""
+    img_src: str
+    url: str
+    title: str
+
+
+class ImageSearchResponse(BaseModel):
+    """Image search response model."""
+    images: List[ImageResult]
+
+
+class ModelInfo(TypedDict):
+    """Model information structure."""
+    displayName: str
+    model: BaseChatModel
+
+
 router = APIRouter(
-    prefix="/images",
     tags=["images"],
     responses={
-        400: {"description": "Invalid request parameters"},
-        422: {"description": "Validation error"},
         500: {"description": "Internal server error"},
     }
 )
 
 
 @router.post(
-    "/search",
-    response_model=List[StreamResponse],
-    description="Search for images based on query",
+    "/",
+    response_model=ImageSearchResponse,
+    description="Search for images based on the given query",
     responses={
         200: {
-            "description": "List of image search results",
-            "model": List[StreamResponse]
+            "description": "Image search results",
+            "model": ImageSearchResponse
         }
     }
 )
-async def search_images(
-    request: ImageSearchRequest,
-    chat_model=Depends(get_chat_model),
-    embeddings_model=Depends(get_embeddings_model)
-) -> List[StreamResponse]:
+async def search_images(request: ImageSearchRequest) -> ImageSearchResponse:
     """
-    Search for images based on the given query.
-    
-    This endpoint performs an image search using the provided query and chat history
-    context. It returns a list of image results with metadata.
+    Search for images based on the given query and chat history.
     
     Args:
-        request: ImageSearchRequest containing search parameters
-        chat_model: Language model for processing
-        embeddings_model: Embeddings model for processing
+        request: The image search request containing query and chat history
         
     Returns:
-        List of StreamResponse containing image results
+        ImageSearchResponse containing the search results
         
     Raises:
-        InvalidInputError: If the query is empty
-        ServerError: If an error occurs during image search
+        HTTPException: If an error occurs during the search
     """
     try:
-        if not request.query:
-            raise InvalidInputError("Query cannot be empty")
+        # Convert chat history to LangChain message types
+        chat_history: List[BaseMessage] = [
+            HumanMessage(content=msg.content) if msg.role == 'user'
+            else AIMessage(content=msg.content)
+            for msg in request.chat_history
+        ]
 
-        history = convert_chat_history(request.history)
-        
-        responses = []
-        async for response in handle_image_search(
-            request.query,
-            history,
-            chat_model,
-            embeddings_model,
-            str(request.optimization_mode)
+        # Get available chat models and select the appropriate one
+        chat_models = await get_available_chat_model_providers()
+        provider = request.chat_model_provider or next(iter(chat_models))
+        model_name = request.chat_model or next(iter(chat_models[provider]))
+
+        # Validate model selection
+        if not chat_models.get(provider) or not chat_models[provider].get(model_name):
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid LLM model selected"
+            )
+
+        # Get the model and ensure it's a BaseChatModel
+        model_info = cast(ModelInfo, chat_models[provider][model_name])
+        llm = model_info['model']
+
+        # Create a dummy embeddings instance since it's not used for image search
+        class DummyEmbeddings(Embeddings):
+            async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+                return [[0.0]]
+
+            async def aembed_query(self, text: str) -> List[float]:
+                return [0.0]
+
+            def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                return [[0.0]]
+
+            def embed_query(self, text: str) -> List[float]:
+                return [0.0]
+
+        # Perform image search
+        images = []
+        async for result in handle_image_search(
+            query=request.query,
+            history=chat_history,
+            llm=llm,
+            embeddings=DummyEmbeddings(),
+            optimization_mode="balanced"
         ):
-            responses.append(StreamResponse(**response))
-            
-        return responses
-    except InvalidInputError:
+            if result["type"] == "error":
+                raise HTTPException(
+                    status_code=500,
+                    detail=result["data"]
+                )
+            elif result["type"] == "images":
+                images = result["data"]
+                break
+
+        return ImageSearchResponse(images=images)
+
+    except HTTPException:
         raise
-    except Exception as e:
-        logger.error("Error in image search: %s", str(e))
-        raise ServerError() from e
+    except Exception as err:
+        logger.error("Error in image search: %s", str(err))
+        raise HTTPException(
+            status_code=500,
+            detail="An error has occurred."
+        ) from err
