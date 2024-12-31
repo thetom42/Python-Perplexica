@@ -4,7 +4,6 @@ Wolfram Alpha Search Agent Module
 This module provides functionality for performing Wolfram Alpha searches using the SearxNG search engine.
 """
 
-from datetime import datetime
 from typing import List, Dict, Any, Literal, AsyncGenerator, Optional
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -45,12 +44,30 @@ class WolframAlphaSearchAgent(AbstractAgent):
         prompt = PromptTemplate.from_template(BASIC_WOLFRAM_ALPHA_SEARCH_RETRIEVER_PROMPT)
         str_parser = StrOutputParser()
 
-        chain = prompt | self.llm | str_parser
-
         async def process_output(query_text: str) -> Dict[str, Any]:
             """Process the LLM output and perform the Wolfram Alpha search."""
+            # Handle the case where query_text is a coroutine
+            if hasattr(query_text, '__await__'):
+                query_text = await query_text
+
+            # Convert to string and validate
+            query_text = str(query_text)
+            
+            # Ensure query_text is a valid string
+            if not isinstance(query_text, str):
+                query_text = str(query_text)
+                if not isinstance(query_text, str):
+                    raise ValueError("Query text must be a valid string")
+
             if query_text.strip() == "not_needed":
-                return {"query": "", "docs": []}
+                return {
+                    "query": "",
+                    "docs": []
+                }
+
+            # Validate query_text is not empty
+            if not query_text.strip():
+                raise ValueError("Query text cannot be empty")
 
             try:
                 res = await search_searxng(query_text, {
@@ -70,29 +87,90 @@ class WolframAlphaSearchAgent(AbstractAgent):
                     for result in res["results"]
                 ]
 
-                return {"query": query_text, "docs": documents}
+                return {
+                    "query": query_text,
+                    "docs": documents
+                }
             except Exception as e:
                 logger.error("Error in Wolfram Alpha search: %s", str(e))
-                return {"query": query_text, "docs": []}
+                raise
 
-        retriever_chain = RunnableSequence([
-            {
-                "rephrased_query": chain,
-                "original_input": RunnablePassthrough()
-            },
-            lambda x: process_output(x["rephrased_query"])
-        ])
+        # Create the initial chain to get the rephrased query
+        initial_chain = prompt | self.llm | str_parser
 
-        return retriever_chain
+        # Create a chain that combines the rephrased query with the original input
+        combined_chain = RunnablePassthrough.assign(
+            rephrased_query=lambda x: initial_chain.ainvoke(x)
+        )
+
+        # Create the final chain that processes the output
+        async def process_chain(x):
+            # Get the raw string response from the LLM
+            query_text = await x["rephrased_query"]
+            if hasattr(query_text, '__await__'):
+                query_text = await query_text
+            # Handle Generation object if present
+            if hasattr(query_text, 'text'):
+                query_text = query_text.text
+            query_text = str(query_text)
+            
+            if query_text.strip() == "not_needed":
+                return {
+                    "query": "",
+                    "docs": []
+                }
+
+            # Validate query_text is not empty
+            if not query_text.strip():
+                raise ValueError("Query text cannot be empty")
+
+            try:
+                res = await search_searxng(query_text, {
+                    "language": "en",
+                    "engines": ["wolframalpha"]
+                })
+
+                documents = [
+                    Document(
+                        page_content=result["content"],
+                        metadata={
+                            "title": result["title"],
+                            "url": result["url"],
+                            **({"img_src": result["img_src"]} if "img_src" in result else {})
+                        }
+                    )
+                    for result in res["results"]
+                ]
+
+                return {
+                    "query": query_text,
+                    "docs": documents
+                }
+            except Exception as e:
+                logger.error("Error in Wolfram Alpha search: %s", str(e))
+                raise
+
+        final_chain = combined_chain | process_chain
+
+        return final_chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the Wolfram Alpha search answering chain."""
         retriever_chain = await self.create_retriever_chain()
+        str_parser = StrOutputParser()
 
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate the final response using the retriever chain and response chain."""
+            # Validate input types
+            if not isinstance(input_data, dict):
+                raise TypeError("Input data must be a dictionary")
+            if not isinstance(input_data.get("query", ""), str):
+                raise TypeError("Query must be a string")
+            if not isinstance(input_data.get("chat_history", []), list):
+                raise TypeError("Chat history must be a list")
+
             try:
-                retriever_result = await retriever_chain.invoke({
+                retriever_result = await retriever_chain.ainvoke({
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
@@ -113,16 +191,35 @@ class WolframAlphaSearchAgent(AbstractAgent):
                     ("human", "{query}")
                 ])
 
-                response_chain = prompt | self.llm
-
-                response = await response_chain.invoke({
+                response_chain = prompt | self.llm | str_parser
+                response = await response_chain.ainvoke({
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
 
+                # Handle the case where response is a coroutine
+                if hasattr(response, '__await__'):
+                    response = await response
+
+                # Convert response to string if it's not already
+                response_text = str(response)
+
+                # Validate response type
+                if not response_text or response_text.lower() == "not_needed":
+                    return {
+                        "type": "response",
+                        "data": "I'm not sure how to help with that. Could you please ask a specific question?"
+                    }
+
+                # Ensure response_text is a valid string
+                if not isinstance(response_text, str):
+                    response_text = str(response_text)
+                    if not isinstance(response_text, str):
+                        raise ValueError("Response must be a valid string")
+
                 return {
                     "type": "response",
-                    "data": response.content,
+                    "data": response_text,
                     "sources": [
                         {
                             "title": doc.metadata.get("title", ""),
@@ -134,35 +231,23 @@ class WolframAlphaSearchAgent(AbstractAgent):
                 }
             except Exception as e:
                 logger.error("Error in response generation: %s", str(e))
-                return {
-                    "type": "error",
-                    "data": "An error occurred while generating the response"
-                }
+                raise
 
-        return RunnableSequence([generate_response])
+        # Create a chain that processes the input and generates the response
+        return RunnablePassthrough() | generate_response
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
+        base_prompt = self.create_base_prompt()
         return f"""
-        You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are set on focus mode 'Wolfram Alpha', this means you will be searching for information on the web using Wolfram Alpha. It is a computational knowledge engine that can answer factual queries and perform computations.
-
-        Generate a response that is informative and relevant to the user's query based on provided context (the context consits of search results containing a brief description of the content of that page).
-        You must use this context to answer the user's query in the best way possible. Use an unbaised and journalistic tone in your response. Do not repeat the text.
-        You must not tell the user to open any link or visit any website to get the answer. You must provide the answer in the response itself. If the user asks for links you can provide them.
-        Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
-        You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
-        Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
-        However you do not need to cite it using the same number. You can use different numbers to cite the same sentence multiple times. The number refers to the number of the search result (passed in the context) used to generate that part of the answer.
-
-        Anything inside the following `context` HTML block provided below is for your knowledge returned by Wolfram Alpha and is not shared by the user. You have to answer question on the basis of it and cite the relevant information from it but you do not have to 
-        talk about the context in your response. 
-
+        {base_prompt}
+        
+        You are set on focus mode 'Wolfram Alpha', this means you will be searching for information using Wolfram Alpha,
+        a computational knowledge engine that can answer factual queries and perform computations.
+        
         <context>
         {context}
         </context>
-
-        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
-        Anything between the `context` is retrieved from Wolfram Alpha and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
         """
 
     async def parse_response(self, response: str) -> Dict[str, Any]:

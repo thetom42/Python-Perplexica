@@ -10,6 +10,7 @@ This is the Python backend for the Perplexica project, implemented using FastAPI
 ## Setup
 
 1. Create a virtual environment:
+
    ```bash
    python3.12 -m venv .venv
    source .venv/bin/activate  # On Linux/macOS
@@ -17,23 +18,26 @@ This is the Python backend for the Perplexica project, implemented using FastAPI
    ```
 
 2. Install required dependencies:
+
    ```bash
    pip install -r requirements.txt
    ```
 
 3. Run database migrations:
+
    ```bash
    alembic upgrade head
    ```
 
 4. Create a default `config.toml` file (if it doesn't exist):
+
    ```bash
    touch config.toml
    ```
+
    Update the `config.toml` file in the project root directory with your actual API keys and endpoints.
 
 5. Ensure Redis is installed and running on your system. You can download it from the [official Redis website](https://redis.io/download).
-
 
 ## Running the Backend
 
@@ -120,11 +124,13 @@ pytest tests/test_integration.py
 To run load tests using Locust:
 
 1. Start your backend server:
+
    ```bash
    uvicorn main:app
    ```
 
 2. In a new terminal, run the Locust command:
+
    ```bash
    locust -f locustfile.py
    ```

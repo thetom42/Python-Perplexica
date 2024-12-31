@@ -1,256 +1,252 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from langchain.schema import HumanMessage, AIMessage, Document
-from agents.web_search_agent import handle_web_search
+from unittest.mock import AsyncMock, MagicMock, patch
+from langchain.schema import Document
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
+from agents.web_search_agent import WebSearchAgent, handle_web_search
+from utils.logger import logger
 
-@pytest.fixture
-def mock_chat_model():
-    mock = AsyncMock()
-    mock.arun = AsyncMock()
-    mock.agenerate = AsyncMock()
-    return mock
+class TestWebSearchAgent:
+    """Test suite for WebSearchAgent"""
 
-@pytest.fixture
-def mock_embeddings_model():
-    mock = AsyncMock()
-    mock.embed_documents = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    mock.embed_query = AsyncMock(return_value=[0.2, 0.3, 0.4])
-    return mock
+    @pytest.fixture
+    def mock_llm(self):
+        """Fixture providing a mock LLM instance"""
+        llm = MagicMock(spec=BaseChatModel)
+        llm.ainvoke = AsyncMock()
+        return llm
 
-@pytest.fixture
-def sample_web_results():
-    return {
-        "results": [
-            {
-                "title": "Paris Info",
-                "url": "https://example.com/paris",
-                "content": "Paris is the capital of France"
+    @pytest.fixture
+    def mock_embeddings(self):
+        """Fixture providing a mock embeddings instance"""
+        return MagicMock(spec=Embeddings)
+
+    @pytest.fixture
+    def web_search_agent(self, mock_llm, mock_embeddings):
+        """Fixture providing a WebSearchAgent instance"""
+        return WebSearchAgent(mock_llm, mock_embeddings)
+
+    @pytest.fixture
+    def mock_search_results(self):
+        """Fixture providing standard search results"""
+        return {
+            "results": [{
+                "content": "test content",
+                "title": "test title",
+                "url": "http://test.com",
+                "img_src": "http://test.com/image.png"
+            }]
+        }
+
+    @pytest.fixture
+    def mock_empty_search_results(self):
+        """Fixture providing empty search results"""
+        return {"results": []}
+
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain(self, web_search_agent):
+        """Test creation of retriever chain"""
+        mock_chain = AsyncMock()
+        mock_chain.invoke = AsyncMock()
+        
+        with patch('agents.web_search_agent.RunnableSequence', return_value=mock_chain):
+            chain = await web_search_agent.create_retriever_chain()
+            assert chain is not None
+
+    @pytest.mark.asyncio
+    async def test_process_output_with_links(self, web_search_agent):
+        """Test process_output with links in the response"""
+        mock_chain = AsyncMock()
+        mock_chain.invoke = AsyncMock(return_value={
+            "llm_output": {
+                "query": "summarize",
+                "docs": [Document(page_content="test content", metadata={"title": "test", "url": "http://test.com"})]
             },
-            {
-                "title": "France Guide",
-                "url": "https://example.com/france",
-                "content": "Paris has a population of 2.2 million"
-            }
-        ]
-    }
+            "original_input": {"query": "test", "chat_history": []}
+        })
+        
+        with patch('agents.web_search_agent.RunnableSequence', return_value=mock_chain):
+            chain = await web_search_agent.create_retriever_chain()
+            result = await chain.invoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert "llm_output" in result
+            assert "query" in result["llm_output"]
+            assert "docs" in result["llm_output"]
+            assert result["llm_output"]["query"] == "summarize"
+            assert len(result["llm_output"]["docs"]) == 1
+            assert result["llm_output"]["docs"][0].page_content == "test content"
 
-@pytest.mark.asyncio
-async def test_handle_web_search_basic(mock_chat_model, mock_embeddings_model):
-    query = "What is the capital of France?"
-    history = [
-        HumanMessage(content="Hello"),
-        AIMessage(content="Hi there!")
-    ]
+    @pytest.mark.asyncio
+    async def test_process_output_without_links(self, web_search_agent):
+        """Test process_output without links in the response"""
+        mock_chain = AsyncMock()
+        mock_chain.invoke = AsyncMock(return_value={
+            "llm_output": {
+                "query": "test question",
+                "docs": [Document(page_content="test content", metadata={"title": "test", "url": "http://test.com"})]
+            },
+            "original_input": {"query": "test", "chat_history": []}
+        })
+        
+        with patch('agents.web_search_agent.RunnableSequence', return_value=mock_chain):
+            chain = await web_search_agent.create_retriever_chain()
+            result = await chain.invoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert "llm_output" in result
+            assert "query" in result["llm_output"]
+            assert "docs" in result["llm_output"]
+            assert result["llm_output"]["query"] == "test question"
+            assert len(result["llm_output"]["docs"]) == 1
+            assert result["llm_output"]["docs"][0].page_content == "test content"
 
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {
-            "results": [
-                {
-                    "title": "Paris Info",
-                    "url": "https://example.com/paris",
-                    "content": "Paris is the capital of France"
-                }
-            ]
-        }
-        mock_chat_model.arun.return_value = "The capital of France is Paris [1]"
+    @pytest.mark.asyncio
+    async def test_create_answering_chain(self, web_search_agent):
+        """Test creation of answering chain"""
+        mock_chain = AsyncMock()
+        mock_chain.invoke = AsyncMock()
+        
+        with patch('agents.web_search_agent.RunnableSequence', return_value=mock_chain):
+            chain = await web_search_agent.create_answering_chain()
+            assert chain is not None
+            mock_chain.invoke.assert_not_called()
 
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "response":
-                assert "[1]" in result["data"]
-                assert "Paris" in result["data"]
-            elif result["type"] == "sources":
-                assert len(result["data"]) > 0
-                assert "url" in result["data"][0]
-
-@pytest.mark.asyncio
-async def test_query_rephrasing_xml_format(mock_chat_model, mock_embeddings_model):
-    query = "Can you summarize https://example.com/article"
-    history = []
-
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search, \
-         patch('backend.lib.link_document.get_documents_from_links') as mock_get_docs:
-
-        mock_chat_model.arun.side_effect = [
-            """
-            <question>
-            summarize
-            </question>
-
-            <links>
-            https://example.com/article
-            </links>
-            """,
-            "Summary of the article"
-        ]
-
-        mock_get_docs.return_value = [
-            Document(
-                page_content="Article content",
-                metadata={"title": "Article", "url": "https://example.com/article"}
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_error(self, web_search_agent):
+        """Test error handling in answering chain creation"""
+        mock_chain = AsyncMock()
+        mock_chain.invoke = AsyncMock(side_effect=Exception("test error"))
+        
+        with patch('agents.web_search_agent.RunnableSequence.from_components', return_value=mock_chain), \
+             patch.object(logger, "error") as mock_logger:
+            
+            chain = await web_search_agent.create_answering_chain()
+            result = await chain.invoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert isinstance(result, dict)
+            assert result["type"] == "error"
+            assert result["data"] == "An error has occurred please try again later"
+            mock_logger.assert_called_once_with(
+                "Error creating answering chain: %s",
+                "test error"
             )
-        ]
 
-        mock_chat_model.agenerate.return_value.generations = [[MagicMock(text="Summarized content")]]
+    @pytest.mark.asyncio
+    async def test_handle_web_search(self):
+        """Test the handle_web_search function with valid input"""
+        mock_llm = MagicMock(spec=BaseChatModel)
+        mock_embeddings = MagicMock(spec=Embeddings)
+        
+        results = []
+        async for result in handle_web_search(
+            query="test",
+            history=[],
+            llm=mock_llm,
+            embeddings=mock_embeddings
+        ):
+            results.append(result)
+            assert result is not None
+        
+        assert len(results) > 0
 
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "response":
-                assert isinstance(result["data"], str)
+    @pytest.mark.asyncio
+    async def test_handle_web_search_with_empty_query(self):
+        """Test handle_web_search with empty query"""
+        mock_llm = MagicMock(spec=BaseChatModel)
+        mock_embeddings = MagicMock(spec=Embeddings)
+        
+        results = []
+        async for result in handle_web_search(
+            query="",
+            history=[],
+            llm=mock_llm,
+            embeddings=mock_embeddings
+        ):
+            results.append(result)
+        
+        assert len(results) == 1
+        assert isinstance(results[0], dict)
+        assert results[0]["type"] == "error"
+        assert results[0]["data"] == "Please provide a valid search query"
 
-@pytest.mark.asyncio
-async def test_webpage_summarization(mock_chat_model, mock_embeddings_model):
-    query = "Summarize https://example.com/article"
-    history = []
-
-    with patch('backend.lib.link_document.get_documents_from_links') as mock_get_docs:
-        mock_get_docs.return_value = [
-            Document(
-                page_content="Long article content here",
-                metadata={"title": "Test Article", "url": "https://example.com/article"}
-            )
-        ]
-
-        mock_chat_model.arun.side_effect = [
-            "<question>summarize</question>\n<links>https://example.com/article</links>",
-            "Article summary"
-        ]
-        mock_chat_model.agenerate.return_value.generations = [[MagicMock(text="Summarized content")]]
-
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "response":
-                assert isinstance(result["data"], str)
-            elif result["type"] == "sources":
-                assert len(result["data"]) > 0
-                assert result["data"][0]["url"] == "https://example.com/article"
-
-@pytest.mark.asyncio
-async def test_optimization_modes(mock_chat_model, mock_embeddings_model, sample_web_results):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = sample_web_results
-
-        for mode in ["speed", "balanced", "quality"]:
+    @pytest.mark.asyncio
+    async def test_handle_web_search_with_error(self):
+        """Test error handling in handle_web_search"""
+        with patch('agents.web_search_agent.WebSearchAgent.handle_search',
+                  side_effect=Exception("test error")), \
+             patch.object(logger, "error") as mock_logger:
+            
+            results = []
             async for result in handle_web_search(
-                query, history, mock_chat_model, mock_embeddings_model, mode
+                query="test",
+                history=[],
+                llm=MagicMock(spec=BaseChatModel),
+                embeddings=MagicMock(spec=Embeddings)
             ):
-                if result["type"] == "sources":
-                    assert isinstance(result["data"], list)
-                elif result["type"] == "response":
-                    assert isinstance(result["data"], str)
-
-@pytest.mark.asyncio
-async def test_error_handling(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
-        mock_search.side_effect = Exception("Search API error")
-
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "error":
-                assert "error" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_empty_query_handling(mock_chat_model, mock_embeddings_model):
-    query = ""
-    history = []
-
-    async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-        if result["type"] == "response":
-            assert "specific question" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_web_results):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = sample_web_results
-        mock_chat_model.arun.return_value = "Response with citation [1][2]"
-
-        sources_received = False
-        response_received = False
-
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "sources":
-                sources_received = True
-                assert len(result["data"]) == len(sample_web_results["results"])
-                for source in result["data"]:
-                    assert "title" in source
-                    assert "url" in source
-            elif result["type"] == "response":
-                response_received = True
-                assert "[1]" in result["data"]
-                assert "[2]" in result["data"]
-
-        assert sources_received and response_received
-
-@pytest.mark.asyncio
-async def test_link_processing_error(mock_chat_model, mock_embeddings_model):
-    query = "Summarize https://example.com/broken-link"
-    history = []
-
-    with patch('backend.lib.link_document.get_documents_from_links') as mock_get_docs:
-        mock_get_docs.side_effect = Exception("Failed to fetch document")
-        mock_chat_model.arun.return_value = "<question>summarize</question>\n<links>https://example.com/broken-link</links>"
-
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "error":
-                assert "error" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_multiple_link_summarization(mock_chat_model, mock_embeddings_model):
-    query = "Summarize https://example.com/1 and https://example.com/2"
-    history = []
-
-    with patch('backend.lib.link_document.get_documents_from_links') as mock_get_docs:
-        mock_get_docs.return_value = [
-            Document(
-                page_content="Content 1",
-                metadata={"title": "Article 1", "url": "https://example.com/1"}
-            ),
-            Document(
-                page_content="Content 2",
-                metadata={"title": "Article 2", "url": "https://example.com/2"}
+                results.append(result)
+            
+            assert len(results) == 1
+            assert isinstance(results[0], dict)
+            assert results[0]["type"] == "error"
+            assert results[0]["data"] == "An error has occurred please try again later"
+            mock_logger.assert_called_once_with(
+                "Error in web search: %s",
+                "test error"
             )
-        ]
 
-        mock_chat_model.arun.side_effect = [
-            "<question>summarize</question>\n<links>\nhttps://example.com/1\nhttps://example.com/2\n</links>",
-            "Combined summary"
-        ]
-        mock_chat_model.agenerate.return_value.generations = [[MagicMock(text="Summarized content")]]
+    @pytest.mark.asyncio
+    async def test_error_handling(self, web_search_agent):
+        """Test error handling in the web search process"""
+        mock_lambda = AsyncMock()
+        mock_lambda.invoke = AsyncMock(side_effect=Exception("Test error"))
+        
+        with patch('agents.web_search_agent.RunnableLambda', return_value=mock_lambda), \
+             patch.object(logger, "error") as mock_logger:
+            
+            chain = await web_search_agent.create_retriever_chain()
+            result = await chain.invoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert "llm_output" in result
+            assert result["llm_output"] == {"query": "", "docs": []}
+            mock_logger.assert_called_once_with(
+                "Error in web search process: %s",
+                "Test error"
+            )
 
-        sources_seen = set()
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "sources":
-                for source in result["data"]:
-                    sources_seen.add(source["url"])
+    @pytest.mark.asyncio
+    async def test_format_prompt(self, web_search_agent):
+        """Test the format_prompt method with valid input"""
+        query = "test query"
+        context = "test context"
+        prompt = web_search_agent.format_prompt(query, context)
+        
+        # Verify all required components are present
+        assert "test query" in prompt
+        assert "test context" in prompt
+        assert "You are Perplexica" in prompt
+        assert "<context>" in prompt
+        assert "informative and relevant" in prompt  # From base prompt
+        
+        # Verify prompt structure
+        assert "You are Perplexica" in prompt
+        assert "<context>" in prompt
+        assert context in prompt
 
-        assert "https://example.com/1" in sources_seen
-        assert "https://example.com/2" in sources_seen
-
-@pytest.mark.asyncio
-async def test_malformed_search_results(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.web_search_agent.search_searxng') as mock_search:
-        # Missing required fields in results
-        mock_search.return_value = {
-            "results": [
-                {"title": "Test"},  # Missing url and content
-                {"url": "https://example.com"},  # Missing title and content
-                {
-                    "title": "Complete",
-                    "url": "https://example.com/complete",
-                    "content": "Complete content"
-                }
-            ]
-        }
-
-        async for result in handle_web_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "sources":
-                # Should handle malformed results gracefully
-                assert len(result["data"]) > 0
+    @pytest.mark.asyncio
+    async def test_format_prompt_with_empty_input(self, web_search_agent):
+        """Test format_prompt with empty query and context"""
+        prompt = web_search_agent.format_prompt("", "")
+        assert "You are Perplexica" in prompt
+        assert "informative and relevant" in prompt  # From base prompt
+        assert "<context>" in prompt  # Base class includes context tags

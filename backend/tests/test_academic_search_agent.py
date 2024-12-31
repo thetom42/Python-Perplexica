@@ -1,179 +1,215 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from langchain.schema import HumanMessage, AIMessage, Document
-from agents.academic_search_agent import handle_academic_search, AcademicSearchAgent
+from unittest.mock import AsyncMock, MagicMock, patch
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
+from agents.academic_search_agent import AcademicSearchAgent
+from utils.logger import logger
 
-@pytest.fixture
-def mock_chat_model():
-    mock = AsyncMock()
-    mock.arun = AsyncMock()
-    return mock
+class TestAcademicSearchAgent:
+    """Test suite for AcademicSearchAgent"""
 
-@pytest.fixture
-def mock_embeddings_model():
-    mock = AsyncMock()
-    mock.embed_documents = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    mock.embed_query = AsyncMock(return_value=[0.2, 0.3, 0.4])
-    return mock
+    @pytest.fixture
+    def mock_llm(self):
+        """Fixture providing a mock LLM instance"""
+        llm = MagicMock(spec=BaseChatModel)
+        llm.ainvoke = AsyncMock(return_value="test query")
+        return llm
 
-@pytest.fixture
-def sample_documents():
-    return [
-        Document(
-            page_content="Quantum computing research paper",
-            metadata={"title": "Quantum Paper", "url": "http://example.com/1"}
-        ),
-        Document(
-            page_content="Machine learning study",
-            metadata={"title": "ML Study", "url": "http://example.com/2"}
-        )
-    ]
+    @pytest.fixture
+    def mock_embeddings(self):
+        """Fixture providing a mock embeddings instance"""
+        return MagicMock(spec=Embeddings)
 
-@pytest.fixture
-def academic_agent(mock_chat_model, mock_embeddings_model):
-    return AcademicSearchAgent(mock_chat_model, mock_embeddings_model, "balanced")
+    @pytest.fixture
+    def academic_search_agent(self, mock_llm, mock_embeddings):
+        """Fixture providing an AcademicSearchAgent instance"""
+        return AcademicSearchAgent(mock_llm, mock_embeddings, "balanced")
 
-@pytest.mark.asyncio
-async def test_handle_academic_search_basic(mock_chat_model, mock_embeddings_model):
-    query = "Recent advancements in quantum computing"
-    history = [
-        HumanMessage(content="Hello"),
-        AIMessage(content="Hi there! How can I help you with academic research today?")
-    ]
-
-    with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {
-            "results": [
-                {"title": "Quantum Paper", "url": "http://example.com", "content": "Latest developments"}
-            ]
-        }
-        mock_chat_model.arun.return_value = "Recent advancements include qubit improvements"
-
-        async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "response":
-                assert "qubit" in result["data"].lower()
-            elif result["type"] == "sources":
-                assert len(result["data"]) > 0
-                assert "title" in result["data"][0]
-
-@pytest.mark.asyncio
-async def test_handle_academic_search_empty_query(mock_chat_model, mock_embeddings_model):
-    query = ""
-    history = []
-
-    async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
-        if result["type"] == "response":
-            assert "not sure how to help" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_handle_academic_search_search_error(mock_chat_model, mock_embeddings_model):
-    query = "quantum computing"
-    history = []
-
-    with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
-        mock_search.side_effect = Exception("Search API error")
-
-        async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "error":
-                assert "error" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_rerank_docs_speed_mode(academic_agent, sample_documents):
-    query = "quantum computing"
-    result = await academic_agent.rerank_docs(query, sample_documents, "speed")
-    assert len(result) <= len(sample_documents)
-
-@pytest.mark.asyncio
-async def test_rerank_docs_balanced_mode(academic_agent, sample_documents):
-    query = "quantum computing"
-    result = await academic_agent.rerank_docs(query, sample_documents)
-    assert len(result) <= len(sample_documents)
-
-@pytest.mark.asyncio
-async def test_process_docs(academic_agent, sample_documents):
-    result = await academic_agent.process_docs(sample_documents)
-    assert "1. Quantum computing research paper" in result
-    assert "2. Machine learning study" in result
-
-@pytest.mark.asyncio
-async def test_create_retriever_chain(academic_agent):
-    chain = await academic_agent.create_retriever_chain()
-    assert chain is not None
-
-    result = await chain.invoke({"query": "test query", "chat_history": []})
-    assert "query" in result
-    assert "docs" in result
-
-@pytest.mark.asyncio
-async def test_handle_academic_search_with_optimization_modes(mock_chat_model, mock_embeddings_model):
-    query = "quantum computing"
-    history = []
-
-    for mode in ["speed", "balanced", "quality"]:
-        with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
-            mock_search.return_value = {
-                "results": [{"title": "Test", "url": "http://test.com", "content": "Test content"}]
-            }
-
-            async for result in handle_academic_search(
-                query, history, mock_chat_model, mock_embeddings_model, mode
-            ):
-                if result["type"] == "response":
-                    assert isinstance(result["data"], str)
-                elif result["type"] == "sources":
-                    assert isinstance(result["data"], list)
-
-@pytest.mark.asyncio
-async def test_integration_search_and_response(mock_chat_model, mock_embeddings_model):
-    """Test the integration between search and response generation"""
-    query = "quantum computing advances"
-    history = []
-
-    with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {
-            "results": [
-                {
-                    "title": "Recent Quantum Computing Paper",
-                    "url": "http://example.com",
-                    "content": "Breakthrough in quantum computing achieved"
-                }
-            ]
+    @pytest.fixture
+    def mock_search_results(self):
+        """Fixture providing standard search results"""
+        return {
+            "results": [{
+                "content": "test content",
+                "title": "test title",
+                "url": "http://test.com",
+                "img_src": "http://test.com/image.png"
+            }]
         }
 
-        sources_received = False
-        response_received = False
+    @pytest.fixture
+    def mock_empty_search_results(self):
+        """Fixture providing empty search results"""
+        return {"results": []}
 
-        async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "sources":
-                sources_received = True
-                assert len(result["data"]) > 0
-            elif result["type"] == "response":
-                response_received = True
-                assert isinstance(result["data"], str)
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain_with_valid_query(self, academic_search_agent, mock_search_results):
+        """Test retriever chain creation with valid query"""
+        with patch("agents.academic_search_agent.search_searxng", 
+                  AsyncMock(return_value=mock_search_results)):
+            chain = await academic_search_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 1
+            assert result["docs"][0].page_content == "test content"
+            assert result["docs"][0].metadata["title"] == "test title"
 
-        assert sources_received and response_received
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain_with_not_needed_query(self, academic_search_agent):
+        """Test retriever chain with query marked as not needed"""
+        academic_search_agent.llm.ainvoke = AsyncMock(return_value="not_needed")
+        
+        chain = await academic_search_agent.create_retriever_chain()
+        result = await chain.ainvoke({
+            "query": "hi",
+            "chat_history": []
+        })
+        
+        assert result["query"] == ""
+        assert len(result["docs"]) == 0
 
-@pytest.mark.asyncio
-async def test_error_handling_invalid_optimization_mode(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain_with_search_error(self, academic_search_agent):
+        """Test error handling in retriever chain"""
+        with patch("agents.academic_search_agent.search_searxng", 
+                  AsyncMock(side_effect=Exception("test error"))), \
+             patch.object(logger, "error") as mock_logger:
+            
+            chain = await academic_search_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 0
+            mock_logger.assert_called_once_with("Error in academic search: %s", "test error")
 
-    with pytest.raises(Exception):
-        async for _ in handle_academic_search(
-            query, history, mock_chat_model, mock_embeddings_model, "invalid_mode"
-        ):
-            pass
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain_with_empty_results(self, academic_search_agent, mock_empty_search_results):
+        """Test retriever chain with empty search results"""
+        with patch("agents.academic_search_agent.search_searxng", 
+                  AsyncMock(return_value=mock_empty_search_results)):
+            chain = await academic_search_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 0
 
-@pytest.mark.asyncio
-async def test_empty_search_results(mock_chat_model, mock_embeddings_model):
-    query = "very specific query with no results"
-    history = []
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain_with_different_search_modes(self, mock_llm, mock_embeddings):
+        """Test retriever chain with different search modes"""
+        for mode in ["balanced", "precise", "fast"]:
+            agent = AcademicSearchAgent(mock_llm, mock_embeddings, mode)
+            chain = await agent.create_retriever_chain()
+            assert chain is not None
 
-    with patch('backend.agents.academic_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {"results": []}
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_valid_response(self, academic_search_agent):
+        """Test answering chain with valid response"""
+        mock_retriever_result = {
+            "query": "test query",
+            "docs": [MagicMock(
+                page_content="test content",
+                metadata={"title": "test title", "url": "http://test.com"}
+            )]
+        }
+        
+        mock_response = MagicMock()
+        mock_response.content = "test response"
+        academic_search_agent.llm.ainvoke = AsyncMock(return_value=mock_response)
+        
+        with patch.object(academic_search_agent, "create_retriever_chain",
+                         AsyncMock(return_value=AsyncMock(ainvoke=AsyncMock(
+                             return_value=mock_retriever_result
+                         )))):
+            chain = await academic_search_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["response"] == "test response"
+            assert len(result["sources"]) == 1
+            assert result["sources"][0]["title"] == "test title"
 
-        async for result in handle_academic_search(query, history, mock_chat_model, mock_embeddings_model):
-            if result["type"] == "response":
-                assert "could not find" in result["data"].lower()
-            elif result["type"] == "sources":
-                assert len(result["data"]) == 0
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_empty_query(self, academic_search_agent):
+        """Test answering chain with empty query"""
+        mock_retriever_result = {
+            "query": "",
+            "docs": []
+        }
+        
+        with patch.object(academic_search_agent, "create_retriever_chain",
+                         AsyncMock(return_value=AsyncMock(ainvoke=AsyncMock(
+                             return_value=mock_retriever_result
+                         )))):
+            chain = await academic_search_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["response"] == "I'm not sure how to help with that. Could you please ask a specific question?"
+            assert len(result["sources"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_error(self, academic_search_agent):
+        """Test error handling in answering chain"""
+        with patch.object(academic_search_agent, "create_retriever_chain",
+                         AsyncMock(return_value=AsyncMock(ainvoke=AsyncMock(
+                             side_effect=Exception("test error")
+                         )))), \
+             patch.object(logger, "error") as mock_logger:
+            
+            chain = await academic_search_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["response"] == "An error occurred while processing the academic search results"
+            assert len(result["sources"]) == 0
+            mock_logger.assert_called_with("Error in response generation: %s", "test error")
+
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_rate_limit_error(self, academic_search_agent):
+        """Test rate limit handling in answering chain"""
+        with patch.object(academic_search_agent, "create_retriever_chain",
+                         AsyncMock(return_value=AsyncMock(ainvoke=AsyncMock(
+                             side_effect=Exception("Rate limit exceeded")
+                         )))), \
+             patch.object(logger, "error") as mock_logger:
+            
+            chain = await academic_search_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert "rate limit" in result["response"].lower()
+            mock_logger.assert_called_with("Error in response generation: %s", "Rate limit exceeded")
+
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_with_invalid_input(self, academic_search_agent):
+        """Test answering chain with invalid input types"""
+        with patch.object(academic_search_agent, "create_retriever_chain",
+                       AsyncMock(return_value=AsyncMock(ainvoke=AsyncMock(
+                           side_effect=TypeError("Invalid input types")
+                       )))):
+            chain = await academic_search_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": None,
+                "chat_history": "invalid"
+            })
+            
+            assert result["response"] == "An error occurred while processing the academic search results"
+            assert len(result["sources"]) == 0

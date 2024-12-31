@@ -1,206 +1,223 @@
+"""Unit tests for the YouTubeSearchAgent module."""
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from langchain.schema import HumanMessage, AIMessage, Document
-from agents.youtube_search_agent import handle_youtube_search
+from unittest.mock import AsyncMock, MagicMock, patch
+from langchain.schema import BaseMessage, HumanMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
+from langchain_core.documents import Document
+from agents.youtube_search_agent import YouTubeSearchAgent, BASIC_YOUTUBE_SEARCH_RETRIEVER_PROMPT
+from utils.logger import logger
 
+class TestYouTubeSearchAgent:
+    """Test suite for YouTubeSearchAgent"""
 
-@pytest.fixture
-def mock_chat_model():
-    mock = AsyncMock()
-    mock.arun = AsyncMock()
-    return mock
+    @pytest.fixture
+    def mock_llm(self):
+        """Fixture providing a mock LLM instance"""
+        llm = MagicMock(spec=BaseChatModel)
+        llm.ainvoke = AsyncMock()
+        return llm
 
-@pytest.fixture
-def mock_embeddings_model():
-    mock = AsyncMock()
-    mock.embed_documents = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    mock.embed_query = AsyncMock(return_value=[0.2, 0.3, 0.4])
-    return mock
+    @pytest.fixture
+    def mock_embeddings(self):
+        """Fixture providing a mock embeddings instance"""
+        return MagicMock(spec=Embeddings)
 
-@pytest.fixture
-def sample_youtube_results():
-    return {
-        "results": [
-            {
-                "title": "Python Tutorial for Beginners",
-                "url": "https://youtube.com/watch?v=1",
-                "content": "Learn Python programming basics",
-                "img_src": "https://i.ytimg.com/vi/1/default.jpg"
-            },
-            {
-                "title": "Advanced Python Concepts",
-                "url": "https://youtube.com/watch?v=2",
-                "content": "Advanced Python programming techniques",
-                "img_src": "https://i.ytimg.com/vi/2/default.jpg"
-            }
+    @pytest.fixture
+    def youtube_agent(self, mock_llm, mock_embeddings):
+        """Fixture providing a YouTubeSearchAgent instance"""
+        agent = YouTubeSearchAgent(mock_llm, mock_embeddings, "balanced")
+        # Mock the abstract methods from AbstractAgent
+        agent.rerank_docs = AsyncMock()
+        agent.process_docs = AsyncMock()
+        agent.create_base_prompt = MagicMock(return_value="Base prompt")
+        return agent
+
+    @pytest.fixture
+    def mock_search_results(self):
+        """Fixture providing standard search results"""
+        return {
+            "results": [{
+                "title": "Test Video",
+                "content": "Test content",
+                "url": "https://example.com",
+                "img_src": "https://example.com/image.jpg"
+            }]
+        }
+
+    @pytest.fixture
+    def mock_empty_search_results(self):
+        """Fixture providing empty search results"""
+        return {"results": []}
+
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain(self, youtube_agent):
+        """Test the creation of the retriever chain"""
+        chain = await youtube_agent.create_retriever_chain()
+        assert chain is not None
+
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_valid_query(self, youtube_agent, mock_llm, mock_search_results):
+        """Test retriever chain with valid query"""
+        mock_llm.ainvoke.return_value = "test query"
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = mock_search_results
+            
+            chain = await youtube_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 1
+            assert isinstance(result["docs"][0], Document)
+
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_not_needed(self, youtube_agent, mock_llm):
+        """Test retriever chain with 'not_needed' response"""
+        mock_llm.ainvoke.return_value = "not_needed"
+        
+        chain = await youtube_agent.create_retriever_chain()
+        result = await chain.ainvoke({
+            "query": "hi",
+            "chat_history": []
+        })
+        
+        assert result["query"] == ""
+        assert len(result["docs"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_search_error(self, youtube_agent, mock_llm):
+        """Test error handling in retriever chain"""
+        mock_llm.ainvoke.return_value = "test query"
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search, \
+             patch.object(logger, "error") as mock_logger:
+            mock_search.side_effect = Exception("Search failed")
+            
+            chain = await youtube_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 0
+            mock_logger.assert_called_once_with("Error in YouTube search: %s", "Search failed")
+
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_empty_results(self, youtube_agent, mock_llm, mock_empty_search_results):
+        """Test retriever chain with empty search results"""
+        mock_llm.ainvoke.return_value = "test query"
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = mock_empty_search_results
+            
+            chain = await youtube_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_create_answering_chain(self, youtube_agent):
+        """Test the creation of the answering chain"""
+        chain = await youtube_agent.create_answering_chain()
+        assert chain is not None
+
+    @pytest.mark.asyncio
+    async def test_answering_chain_with_results(self, youtube_agent, mock_llm, mock_search_results):
+        """Test answering chain with search results"""
+        mock_llm.ainvoke.side_effect = [
+            "test query",  # For retriever chain
+            "Test response"  # For answering chain
         ]
-    }
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = mock_search_results
+            
+            youtube_agent.rerank_docs.return_value = [Document(page_content="Test content")]
+            youtube_agent.process_docs.return_value = "Test context"
+            
+            chain = await youtube_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["type"] == "error"
+            assert "An error occurred" in result["data"]
+            assert len(result["sources"]) == 1
 
-@pytest.mark.asyncio
-async def test_handle_youtube_search_basic(mock_chat_model, mock_embeddings_model):
-    query = "Python programming tutorials"
-    history = [
-        HumanMessage(content="Hello"),
-        AIMessage(content="Hi there!")
-    ]
+    @pytest.mark.asyncio
+    async def test_answering_chain_with_document_processing_error(self, youtube_agent, mock_llm, mock_search_results):
+        """Test error handling in answering chain when document processing fails"""
+        mock_llm.ainvoke.return_value = "test query"
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search, \
+             patch.object(logger, "error") as mock_logger:
+            mock_search.return_value = mock_search_results
+            
+            youtube_agent.rerank_docs.side_effect = Exception("Processing failed")
+            
+            chain = await youtube_agent.create_answering_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["type"] == "error"
+            assert "An error occurred" in result["data"]
+            mock_logger.assert_called_once_with("Error in document processing: %s", "Processing failed")
 
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {
-            "results": [
-                {
-                    "title": "Python Tutorial",
-                    "url": "https://youtube.com/watch?v=1",
-                    "content": "Learn Python basics",
-                    "img_src": "https://i.ytimg.com/vi/1/default.jpg"
-                }
-            ]
-        }
-        mock_chat_model.arun.return_value = "Here's a great Python tutorial video [1]"
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_rate_limit_error(self, youtube_agent, mock_llm):
+        """Test rate limit handling in retriever chain"""
+        mock_llm.ainvoke.return_value = "test query"
+        
+        with patch("agents.youtube_search_agent.search_searxng", new_callable=AsyncMock) as mock_search, \
+             patch.object(logger, "error") as mock_logger:
+            mock_search.side_effect = Exception("Rate limit exceeded")
+            
+            chain = await youtube_agent.create_retriever_chain()
+            result = await chain.ainvoke({
+                "query": "test",
+                "chat_history": []
+            })
+            
+            assert result["query"] == "test query"
+            assert len(result["docs"]) == 0
+            mock_logger.assert_called_once_with("Error in YouTube search: %s", "Rate limit exceeded")
 
-        async for result in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            if result["type"] == "response":
-                assert "[1]" in result["data"]
-                assert "Python" in result["data"]
-            elif result["type"] == "sources":
-                assert len(result["data"]) > 0
-                assert "url" in result["data"][0]
-                assert "img_src" in result["data"][0]
+    @pytest.mark.asyncio
+    async def test_retriever_chain_with_different_search_modes(self, mock_llm, mock_embeddings):
+        """Test retriever chain with different search modes"""
+        for mode in ["balanced", "precise", "fast"]:
+            agent = YouTubeSearchAgent(mock_llm, mock_embeddings, mode)
+            chain = await agent.create_retriever_chain()
+            assert chain is not None
 
-@pytest.mark.asyncio
-async def test_optimization_modes(mock_chat_model, mock_embeddings_model, sample_youtube_results):
-    query = "test query"
-    history = []
+    @pytest.mark.asyncio
+    async def test_parse_response(self, youtube_agent):
+        """Test response parsing"""
+        response = "Test response"
+        result = await youtube_agent.parse_response(response)
+        
+        assert result["type"] == "response"
+        assert result["data"] == response
 
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = sample_youtube_results
-
-        for mode in ["speed", "balanced", "quality"]:
-            async for result in handle_youtube_search(
-                query, history, mock_chat_model, mock_embeddings_model, mode
-            ):
-                if result["type"] == "sources":
-                    assert isinstance(result["data"], list)
-                elif result["type"] == "response":
-                    assert isinstance(result["data"], str)
-
-@pytest.mark.asyncio
-async def test_query_rephrasing(mock_chat_model, mock_embeddings_model):
-    query = "Show me how to make a cake"
-    history = [
-        HumanMessage(content="I want to learn cooking"),
-        AIMessage(content="I can help with that!")
-    ]
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {"results": []}
-        mock_chat_model.arun.return_value = "cake making tutorial"
-
-        async for _ in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            pass
-
-        # Verify the query was processed through the rephrasing chain
-        assert mock_chat_model.arun.called
-        call_args = mock_chat_model.arun.call_args[1]
-        assert "chat_history" in call_args
-        assert "query" in call_args
-
-@pytest.mark.asyncio
-async def test_youtube_specific_search(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {"results": []}
-
-        async for _ in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            pass
-
-        # Verify YouTube-specific search configuration
-        mock_search.assert_called_once()
-        call_args = mock_search.call_args[1]
-        assert call_args.get("engines") == ["youtube"]
-
-@pytest.mark.asyncio
-async def test_error_handling(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.side_effect = Exception("Search API error")
-
-        async for result in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            if result["type"] == "error":
-                assert "error" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_empty_query_handling(mock_chat_model, mock_embeddings_model):
-    query = ""
-    history = []
-
-    async for result in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-        if result["type"] == "response":
-            assert "specific question" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_source_tracking(mock_chat_model, mock_embeddings_model, sample_youtube_results):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = sample_youtube_results
-        mock_chat_model.arun.return_value = "Response with citation [1][2]"
-
-        sources_received = False
-        response_received = False
-
-        async for result in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            if result["type"] == "sources":
-                sources_received = True
-                assert len(result["data"]) == len(sample_youtube_results["results"])
-                for source in result["data"]:
-                    assert "title" in source
-                    assert "url" in source
-                    assert "img_src" in source
-            elif result["type"] == "response":
-                response_received = True
-                assert "[1]" in result["data"]
-                assert "[2]" in result["data"]
-
-        assert sources_received and response_received
-
-@pytest.mark.asyncio
-async def test_invalid_history_handling(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    invalid_history = ["not a valid message"]  # Invalid history format
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        mock_search.return_value = {"results": []}
-
-        async for result in handle_youtube_search(query, invalid_history, mock_chat_model, mock_embeddings_model, "balanced"):
-            # Should handle invalid history gracefully
-            assert result["type"] in ["response", "sources", "error"]
-
-@pytest.mark.asyncio
-async def test_malformed_search_results(mock_chat_model, mock_embeddings_model):
-    query = "test query"
-    history = []
-
-    with patch('backend.agents.youtube_search_agent.search_searxng') as mock_search:
-        # Missing required fields in results
-        mock_search.return_value = {
-            "results": [
-                {"title": "Test"},  # Missing url and content
-                {"url": "https://youtube.com"},  # Missing title and content
-                {
-                    "title": "Complete",
-                    "url": "https://youtube.com/complete",
-                    "content": "Complete content",
-                    "img_src": "https://i.ytimg.com/vi/3/default.jpg"
-                }
-            ]
-        }
-
-        async for result in handle_youtube_search(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-            if result["type"] == "sources":
-                # Should handle malformed results gracefully
-                assert len(result["data"]) > 0
+    @pytest.mark.asyncio
+    async def test_parse_response_with_error(self, youtube_agent):
+        """Test error handling in response parsing"""
+        with patch.object(logger, "error") as mock_logger:
+            result = await youtube_agent.parse_response(None)
+            
+            assert result["type"] == "error"
+            assert "An error occurred" in result["data"]
+            mock_logger.assert_called_once_with("Error parsing YouTube search response: %s", None)

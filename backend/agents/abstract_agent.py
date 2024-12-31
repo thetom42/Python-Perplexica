@@ -12,9 +12,7 @@ from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import RunnableSequence
-from langchain.prompts import ChatPromptTemplate, PromptTemplate
 from utils.compute_similarity import compute_similarity
-from utils.format_history import format_chat_history_as_string
 from utils.logger import logger
 
 class AbstractAgent(ABC):
@@ -100,8 +98,10 @@ class AbstractAgent(ABC):
                     for i, doc_embedding in enumerate(doc_embeddings)
                 ]
 
-                sorted_docs = sorted(similarity_scores, key=lambda x: x["similarity"], reverse=True)[:15]
-                return [docs_with_content[score["index"]] for score in sorted_docs]
+                # Filter docs with similarity > 0.3 and take top 15
+                sorted_docs = sorted(similarity_scores, key=lambda x: x["similarity"], reverse=True)
+                filtered_docs = [docs_with_content[score["index"]] for score in sorted_docs if score["similarity"] > 0.3][:15]
+                return filtered_docs
 
             return docs_with_content  # Default case for "quality" mode
         except Exception as e:
@@ -125,22 +125,29 @@ class AbstractAgent(ABC):
         """
         try:
             answering_chain = await self.create_answering_chain()
-
-            result = await answering_chain.invoke({
+            
+            result = await answering_chain.ainvoke({
                 "query": query,
                 "chat_history": history
             })
 
-            if "sources" in result:
-                yield {"type": "sources", "data": result["sources"]}
-
-            yield {"type": "response", "data": result.get("response", result.get("data", ""))}
+            if isinstance(result, dict):
+                if "error" in result:
+                    yield {
+                        "type": "error",
+                        "data": result["error"]
+                    }
+                elif "sources" in result:
+                    yield {"type": "sources", "data": result["sources"]}
+                yield {"type": "response", "data": result.get("response", result.get("data", ""))}
+            else:
+                yield {"type": "response", "data": str(result)}
 
         except Exception as e:
             logger.error("Error in search: %s", str(e))
             yield {
                 "type": "error",
-                "data": "An error has occurred please try again later"
+                "data": f"An error occurred: {str(e)}"
             }
 
     async def handle_search(
@@ -158,10 +165,32 @@ class AbstractAgent(ABC):
         Yields:
             Dict[str, Any]: Dictionaries containing response types and data
         """
-        async for result in self.basic_search(query, history):
-            yield result
+        try:
+            async for result in self.basic_search(query, history):
+                yield result
+        except Exception as e:
+            logger.error(f"Error in search handling: {str(e)}")
+            yield {
+                "type": "error",
+                "data": f"An error occurred: {str(e)}"
+            }
 
-    @abstractmethod
+    def create_base_prompt(self) -> str:
+        """
+        Create the base prompt template for all agents.
+        
+        Returns:
+            str: The base prompt template
+        """
+        return """
+        You are Perplexica, an AI model who is expert at searching the web and answering user's queries.
+        
+        Generate a response that is informative and relevant to the user's query based on provided context.
+        You must use this context to answer the user's query in the best way possible. Use an unbiased and journalistic tone in your response.
+        Your responses should be medium to long in length and informative. You can use markdown to format your response.
+        You have to cite the answer using [number] notation. Place these citations at the end of relevant sentences.
+        """
+
     def format_prompt(self, query: str, context: str) -> str:
         """
         Format the prompt for the language model.
@@ -173,8 +202,17 @@ class AbstractAgent(ABC):
         Returns:
             str: The formatted prompt
         """
+        base_prompt = self.create_base_prompt()
+        return f"""
+        {base_prompt}
+        
+        <context>
+        {context}
+        </context>
+        
+        Today's date is {datetime.now().isoformat()}
+        """
 
-    @abstractmethod
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """
         Parse the response from the language model.
@@ -185,3 +223,7 @@ class AbstractAgent(ABC):
         Returns:
             Dict[str, Any]: The parsed response with appropriate structure
         """
+        return {
+            "type": "response",
+            "data": response
+        }

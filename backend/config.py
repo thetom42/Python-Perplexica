@@ -14,6 +14,7 @@ class GeneralConfig(TypedDict):
     """Type definition for general configuration settings."""
     PORT: int  # Port to run the server on
     SIMILARITY_MEASURE: str  # "cosine" or "dot"
+    CORS_ORIGINS: list[str]  # List of allowed CORS origins
 
 
 class ApiKeysConfig(TypedDict):
@@ -45,6 +46,7 @@ class PartialGeneralConfig(TypedDict, total=False):
     """Partial type definition for general configuration settings."""
     PORT: NotRequired[int]
     SIMILARITY_MEASURE: NotRequired[str]
+    CORS_ORIGINS: NotRequired[list[str]]
 
 
 class PartialApiKeysConfig(TypedDict, total=False):
@@ -114,6 +116,11 @@ def get_searxng_api_endpoint() -> str:
 def get_ollama_api_endpoint() -> str:
     """Get the Ollama API endpoint from configuration."""
     return load_config()['API_ENDPOINTS']['OLLAMA']
+
+
+def get_cors_origins() -> list[str]:
+    """Get the list of allowed CORS origins from configuration."""
+    return load_config()['GENERAL']['CORS_ORIGINS']
 
 
 def update_config(new_config: PartialConfig) -> None:

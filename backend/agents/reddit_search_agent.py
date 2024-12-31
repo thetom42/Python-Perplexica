@@ -1,23 +1,20 @@
-"""
-Reddit Search Agent Module
+"""Reddit Search Agent Module
 
 This module provides functionality for performing Reddit searches using the SearxNG search engine.
 It includes document reranking capabilities to prioritize the most relevant Reddit discussions
 and comments.
 """
 
-from datetime import datetime
 from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.runnables import RunnableSequence, RunnablePassthrough
+from langchain.prompts import PromptTemplate
+from langchain_core.runnables import RunnableSequence, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from lib.searxng import search_searxng
 from utils.logger import logger
 from agents.abstract_agent import AbstractAgent
-from utils.compute_similarity import compute_similarity
 
 BASIC_REDDIT_SEARCH_RETRIEVER_PROMPT = """
 You will be given a conversation below and a follow up question. You need to rephrase the follow-up question if needed so it is a standalone question that can be used by the LLM to search the web for information.
@@ -50,9 +47,10 @@ class RedditSearchAgent(AbstractAgent):
 
         chain = prompt | self.llm | str_parser
 
-        async def process_output(query_text: str) -> Dict[str, Any]:
+        async def process_output(output: Dict[str, Any]) -> Dict[str, Any]:
             """Process the LLM output and perform the Reddit search."""
-            if query_text.strip() == "not_needed":
+            query_text = output.get("rephrased_query", "")
+            if isinstance(query_text, str) and query_text.strip() == "not_needed":
                 return {"query": "", "docs": []}
 
             try:
@@ -75,52 +73,78 @@ class RedditSearchAgent(AbstractAgent):
 
                 return {"query": query_text, "docs": documents}
             except Exception as e:
-                logger.error("Error in Reddit search: %s", str(e))
+                logger.error("Error in reddit search: %s", str(e))
                 return {"query": query_text, "docs": []}
 
-        retriever_chain = RunnableSequence([
-            {
-                "rephrased_query": chain,
-                "original_input": RunnablePassthrough()
-            },
-            lambda x: process_output(x["rephrased_query"])
-        ])
+        return RunnableSequence(
+            RunnablePassthrough.assign(rephrased_query=chain),
+            RunnableLambda(process_output)
+        )
 
-        return retriever_chain
+    async def handle_search(self, query: str, history: List[BaseMessage]) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle a search query and generate streaming responses."""
+        answering_chain = await self.create_answering_chain()
+        result = await answering_chain.ainvoke({
+            "query": query,
+            "chat_history": history
+        })
+        yield result
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the Reddit search answering chain."""
+        def validate_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(input_data.get("query"), str) or not isinstance(input_data.get("chat_history"), list):
+                raise TypeError("Invalid input types: query must be string and chat_history must be list")
+            return input_data
+            
         retriever_chain = await self.create_retriever_chain()
 
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate the final response using the retriever chain and response chain."""
+            if not isinstance(input_data.get("query"), str) or not isinstance(input_data.get("chat_history"), list):
+                raise TypeError("Invalid input types: query must be string and chat_history must be list")
+            
             try:
-                retriever_result = await retriever_chain.invoke({
+                retriever_result = await retriever_chain.ainvoke({
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
-
-                if not retriever_result["query"]:
+            except Exception as e:
+                error_msg = str(e)
+                if "Rate limit exceeded" in error_msg:
                     return {
                         "type": "response",
-                        "data": "I'm not sure how to help with that. Could you please ask a specific question?"
+                        "data": "I'm currently experiencing rate limits. Please try again in a few minutes.",
+                        "sources": []
                     }
+                logger.error("Error in response generation: %s", error_msg)
+                return {
+                    "type": "response",
+                    "data": "An error occurred while processing your request. Please try again.",
+                    "sources": []
+                }
 
-                reranked_docs = await self.rerank_docs(retriever_result["query"], retriever_result["docs"])
-                context = await self.process_docs(reranked_docs)
+            if not retriever_result["query"]:
+                return {
+                    "type": "response",
+                    "data": "I'm not sure how to help with that. Could you please ask a specific question?",
+                    "sources": []
+                }
 
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", self.format_prompt(input_data["query"], context)),
-                    ("human", "{query}")
-                ])
+            docs = retriever_result["docs"]
+            if hasattr(docs, '__await__'):
+                docs = await docs
+            reranked_docs = await self.rerank_docs(retriever_result["query"], docs)
+            context = await self.process_docs(reranked_docs)
+            formatted_prompt = self.format_prompt(input_data["query"], context)
 
-                response_chain = prompt | self.llm
-
-                response = await response_chain.invoke({"query": input_data["query"]})
+            try:
+                response = await self.llm.ainvoke({"query": formatted_prompt})
+                response_content = response.content if hasattr(response, 'content') else str(response)
 
                 return {
                     "type": "response",
-                    "data": response.content,
+                    "data": response_content,
                     "sources": [
                         {
                             "title": doc.metadata.get("title", ""),
@@ -131,69 +155,38 @@ class RedditSearchAgent(AbstractAgent):
                     ]
                 }
             except Exception as e:
-                logger.error("Error in response generation: %s", str(e))
+                error_msg = str(e)
+                if "Rate limit exceeded" in error_msg:
+                    return {
+                        "type": "response",
+                        "data": "I'm currently experiencing high traffic. Please try again later.",
+                        "sources": []
+                    }
+                logger.error("Error in response generation: %s", error_msg)
                 return {
-                    "type": "error",
-                    "data": "An error occurred while processing Reddit search results"
+                    "type": "response",
+                    "data": "An error occurred while generating the response. Please try again.",
+                    "sources": []
                 }
 
-        return RunnableSequence([generate_response])
+        return RunnableSequence(
+            RunnablePassthrough(),
+            RunnableLambda(generate_response)
+        )
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
+        base_prompt = self.create_base_prompt()
         return f"""
-        You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are set on focus mode 'Reddit', this means you will be searching for information, opinions and discussions on the web using Reddit.
-
-        Generate a response that is informative and relevant to the user's query based on provided context (the context consits of search results containing a brief description of the content of that page).
-        You must use this context to answer the user's query in the best way possible. Use an unbaised and journalistic tone in your response. Do not repeat the text.
-        You must not tell the user to open any link or visit any website to get the answer. You must provide the answer in the response itself. If the user asks for links you can provide them.
-        Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
-        You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
-        Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
-        However you do not need to cite it using the same number. You can use different numbers to cite the same sentence multiple times. The number refers to the number of the search result (passed in the context) used to generate that part of the answer.
-
-        Anything inside the following `context` HTML block provided below is for your knowledge returned by Reddit and is not shared by the user. You have to answer question on the basis of it and cite the relevant information from it but you do not have to
-        talk about the context in your response.
-
+        {base_prompt}
+        
+        You are set on focus mode 'Reddit', this means you will be searching for information, opinions and discussions on Reddit.
+        The context provided contains search results from Reddit discussions and comments.
+        
         <context>
         {context}
         </context>
-
-        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
-        Anything between the `context` is retrieved from Reddit and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
         """
-
-    async def rerank_docs(self, query: str, docs: List[Document]) -> List[Document]:
-        """Rerank documents based on relevance to query."""
-        if not docs:
-            return docs
-
-        docs_with_content = [doc for doc in docs if doc.page_content and len(doc.page_content) > 0]
-
-        if self.optimization_mode == "speed":
-            return docs_with_content[:15]
-        elif self.optimization_mode == "balanced":
-            doc_embeddings = await self.embeddings.embed_documents([doc.page_content for doc in docs_with_content])
-            query_embedding = await self.embeddings.embed_query(query)
-
-            similarities = []
-            for i, doc_embedding in enumerate(doc_embeddings):
-                sim = compute_similarity(query_embedding, doc_embedding)
-                similarities.append({"index": i, "similarity": sim})
-
-            # Filter docs with similarity > 0.3 and take top 15
-            sorted_docs = sorted(similarities, key=lambda x: x["similarity"], reverse=True)
-            filtered_docs = [docs_with_content[s["index"]] for s in sorted_docs if s["similarity"] > 0.3][:15]
-            return filtered_docs
-
-        return docs
-
-    async def parse_response(self, response: str) -> Dict[str, Any]:
-        """Parse the response from the language model."""
-        return {
-            "type": "response",
-            "data": response
-        }
 
 async def handle_reddit_search(
     query: str,

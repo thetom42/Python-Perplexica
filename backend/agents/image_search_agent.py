@@ -9,7 +9,7 @@ from typing import Dict, Any, List, AsyncGenerator
 from langchain.schema import BaseMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.prompts import ChatPromptTemplate, PromptTemplate
+from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSequence, RunnablePassthrough
 from lib.searxng import search_searxng
 from utils.logger import logger
@@ -39,54 +39,89 @@ Rephrased question:
 class ImageSearchAgent(AbstractAgent):
     """Agent for performing image searches and processing results."""
 
+    def validate_input(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate input data types."""
+        query = input_data.get("query")
+        chat_history = input_data.get("chat_history")
+
+        if query is None or not isinstance(query, str):
+            raise TypeError("Query must be a string")
+        if not isinstance(chat_history, list):
+            raise TypeError("Chat history must be a list")
+
+        return input_data
+
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the image search retriever chain."""
+        if not hasattr(self, 'llm') or not isinstance(self.llm, BaseChatModel):
+            raise TypeError("llm must be an instance of BaseChatModel")
+            
         prompt = PromptTemplate.from_template(IMAGE_SEARCH_PROMPT)
 
         # Set temperature to 0 for more precise rephrasing
         if hasattr(self.llm, "temperature"):
             self.llm.temperature = 0
 
-        chain = prompt | self.llm
-
-        async def process_output(llm_output: Any) -> Dict[str, Any]:
-            """Process the LLM output and perform the image search."""
+        async def process_query(input_data: Dict[str, Any]) -> Dict[str, Any]:
+            """Process the query and perform the search."""
             try:
+                query = input_data["query"]
+                # Handle empty query
+                if not query.strip():
+                    return {"query": "", "images": [], "response": None}
+
+                # Rephrase query
+                formatted_prompt = prompt.format(
+                    query=query,
+                    chat_history=input_data.get("chat_history", [])
+                )
+                llm_output = await self.llm.ainvoke(formatted_prompt)
                 rephrased_query = llm_output.content if hasattr(llm_output, 'content') else str(llm_output)
+                rephrased_query = rephrased_query.strip()
 
-                results = await search_searxng(rephrased_query, {
-                    "engines": ["bing images", "google images"]
-                })
+                try:
+                    # Perform search
+                    results = await search_searxng(rephrased_query, {
+                        "engines": ["bing images", "google images"]
+                    })
 
-                if not results or not results.get("results"):
-                    return {"query": rephrased_query, "images": []}
+                    if not results or not results.get("results"):
+                        return {"query": rephrased_query, "images": [], "response": None}
 
-                image_results = []
-                for result in results["results"]:
-                    if all(key in result for key in ["img_src", "url", "title"]):
-                        image_results.append({
-                            "img_src": result["img_src"],
-                            "url": result["url"],
-                            "title": result["title"]
-                        })
+                    image_results = []
+                    for result in results["results"]:
+                        if all(key in result for key in ["img_src", "url", "title"]):
+                            image_results.append({
+                                "img_src": result["img_src"],
+                                "url": result["url"],
+                                "title": result["title"]
+                            })
 
-                # Limit to 10 results
-                image_results = image_results[:10]
+                    # Limit to 10 results
+                    return {
+                        "query": rephrased_query,
+                        "images": image_results[:10],
+                        "response": None
+                    }
 
-                return {"query": rephrased_query, "images": image_results}
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error("Error in image search: %s", error_msg)
+                    if "rate limit" in error_msg.lower():
+                        return {
+                            "query": "",
+                            "images": [],
+                            "response": f"Rate limit error: {error_msg}"
+                        }
+                    return {"query": "", "images": [], "response": None}
+
             except Exception as e:
-                logger.error("Error in image search/processing: %s", str(e))
-                return {"query": "", "images": []}
+                logger.error("Error in query processing: %s", str(e))
+                return {"query": "", "images": [], "response": None}
 
-        retriever_chain = RunnableSequence([
-            {
-                "llm_output": chain,
-                "original_input": RunnablePassthrough()
-            },
-            lambda x: process_output(x["llm_output"])
-        ])
-
-        return retriever_chain
+        # Create the chain with validation first
+        chain = RunnablePassthrough() | self.validate_input | process_query
+        return chain
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the image search answering chain."""
@@ -95,18 +130,17 @@ class ImageSearchAgent(AbstractAgent):
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate the final response using the retriever chain."""
             try:
-                retriever_result = await retriever_chain.invoke({
-                    "query": input_data["query"],
-                    "chat_history": input_data["chat_history"]
-                })
+                retriever_result = await retriever_chain.ainvoke(input_data)
 
-                if not retriever_result["query"]:
+                # Handle rate limit errors or other errors with response
+                if retriever_result.get("response"):
                     return {
                         "type": "error",
-                        "data": "An error occurred during image search"
+                        "data": retriever_result["response"]
                     }
 
-                if not retriever_result["images"]:
+                # Handle empty results
+                if not retriever_result.get("images"):
                     return {
                         "type": "error",
                         "data": "No images found. Please try a different search query."
@@ -123,16 +157,21 @@ class ImageSearchAgent(AbstractAgent):
                     "data": "An error occurred while processing the image search results"
                 }
 
-        return RunnableSequence([generate_response])
+        # Create the chain with validation first
+        chain = RunnablePassthrough() | self.validate_input | generate_response
+        return chain
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
-        # Not used for image search but required by AbstractAgent
-        return ""
+        base_prompt = self.create_base_prompt()
+        return f"""
+        {base_prompt}
+        
+        You are set on focus mode 'Image Search', this means you will be searching for relevant images based on the user's query.
+        """
 
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the language model."""
-        # Not used for image search but required by AbstractAgent
         return {
             "type": "response",
             "data": response

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from langchain.chat_models.base import BaseChatModel
 from langchain.embeddings.base import Embeddings
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from providers import get_available_chat_model_providers, get_available_embedding_model_providers
 from websocket.message_handler import search_handlers
@@ -75,6 +75,7 @@ async def search(body: SearchRequest) -> SearchResponse:
         HTTPException: If an error occurs during search
     """
     try:
+        logger.info(f"Processing search request: {body}")
         if not body.focusMode or not body.query:
             raise HTTPException(
                 status_code=400,
@@ -102,19 +103,7 @@ async def search(body: SearchRequest) -> SearchResponse:
 
         # Setup LLM
         llm: Optional[BaseChatModel] = None
-        if body.chatModel and body.chatModel.provider == "custom_openai":
-            if not body.chatModel.customOpenAIBaseURL or not body.chatModel.customOpenAIKey:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Missing custom OpenAI base URL or key"
-                )
-            llm = ChatOpenAI(
-                model_name=body.chatModel.model,
-                openai_api_key=body.chatModel.customOpenAIKey,
-                temperature=0.7,
-                openai_api_base=body.chatModel.customOpenAIBaseURL
-            )
-        elif chat_provider in chat_models and chat_model_name in chat_models[chat_provider]:
+        if chat_provider in chat_models and chat_model_name in chat_models[chat_provider]:
             llm = chat_models[chat_provider][chat_model_name].model
 
         # Setup embeddings

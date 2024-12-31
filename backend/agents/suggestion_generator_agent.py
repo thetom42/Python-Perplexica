@@ -5,12 +5,12 @@ This module provides functionality for generating relevant suggestions based on 
 It analyzes the conversation context to provide meaningful follow-up questions or topics.
 """
 
-from typing import List, Dict, Any, Literal, AsyncGenerator, Optional
-from langchain.schema import BaseMessage, Document
+from typing import List, Dict, Any, Literal, Optional
+from langchain.schema import BaseMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
-from langchain.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.runnables import RunnableSequence, RunnablePassthrough
+from langchain.prompts import PromptTemplate
+from langchain_core.runnables import RunnableSequence, RunnableLambda
 from utils.format_history import format_chat_history_as_string
 from lib.output_parsers.list_line_output_parser import ListLineOutputParser
 from utils.logger import logger
@@ -36,13 +36,24 @@ Conversation:
 class SuggestionGeneratorAgent(AbstractAgent):
     """Agent for generating suggestions based on chat history."""
 
+    def __init__(self, llm: BaseChatModel, embeddings: Embeddings, optimization_mode: Literal["speed", "balanced", "quality"] = "balanced"):
+        """Initialize the agent with the given language model and embeddings."""
+        if not isinstance(llm, BaseChatModel):
+            raise TypeError("llm must be an instance of BaseChatModel")
+        if not isinstance(embeddings, Embeddings):
+            raise TypeError("embeddings must be an instance of Embeddings")
+        super().__init__(llm, embeddings, optimization_mode)
+
     async def create_retriever_chain(self) -> RunnableSequence:
         """Create the suggestion generator retriever chain."""
         async def process_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the input and return empty docs since we don't need retrieval."""
             return {"query": "", "docs": []}
 
-        return RunnableSequence([process_input])
+        return RunnableSequence(
+            RunnableLambda(lambda x: {"query": "", "docs": []}),
+            RunnableLambda(process_input)
+        )
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the suggestion generator answering chain."""
@@ -68,31 +79,52 @@ class SuggestionGeneratorAgent(AbstractAgent):
                     "data": suggestions
                 }
             except Exception as e:
-                logger.error("Error parsing suggestions: %s", str(e))
-                return {
-                    "type": "response",
-                    "data": ["Unable to generate suggestions at this time"]
-                }
+                raise e
 
-        chain = RunnableSequence([
-            map_input,
+        chain = RunnableSequence(
+            RunnableLambda(map_input),
             prompt | self.llm,
-            lambda x: x.content if hasattr(x, 'content') else x,
-            process_output
-        ])
+            RunnableLambda(lambda x: x.content if hasattr(x, 'content') else x),
+            RunnableLambda(process_output)
+        )
 
         return chain
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
-        # Not used for suggestion generation as we use a fixed prompt
-        return SUGGESTION_GENERATOR_PROMPT
+        base_prompt = self.create_base_prompt()
+        return f"""
+        {base_prompt}
+        
+        You are set on focus mode 'Suggestion Generation', this means you will analyze the conversation history
+        to generate relevant follow-up questions or topics that the user might want to explore.
+        """
 
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the language model."""
+        if not response:
+            return {
+                "type": "response",
+                "data": []
+            }
+        
+        # Check if response is in valid format
+        if not response.strip() or response.strip() == "Invalid format":
+            raise ValueError("Invalid response format")
+        
+        # Extract content from XML tags if present
+        if "<suggestions>" in response and "</suggestions>" in response:
+            start = response.find("<suggestions>") + len("<suggestions>")
+            end = response.find("</suggestions>")
+            if start == -1 or end == -1 or start >= end:
+                raise ValueError("Invalid response format")
+            response = response[start:end]
+        
+        # Split into lines and clean up
+        suggestions = [s.strip() for s in response.split("\n") if s.strip()]
         return {
             "type": "response",
-            "data": response.split("\n") if response else []
+            "data": suggestions
         }
 
 async def handle_suggestion_generation(
@@ -114,21 +146,27 @@ async def handle_suggestion_generation(
         List[str]: A list of generated suggestions. Returns a single error message
                   if suggestion generation fails.
     """
-    try:
-        # Create a dummy embeddings object if none provided since AbstractAgent requires it
-        if embeddings is None:
-            class DummyEmbeddings(Embeddings):
-                def embed_documents(self, texts: List[str]) -> List[List[float]]:
-                    return [[0.0] for _ in texts]
-                def embed_query(self, text: str) -> List[float]:
-                    return [0.0]
-            embeddings = DummyEmbeddings()
+    # Create a dummy embeddings object if none provided since AbstractAgent requires it
+    if embeddings is None:
+        class DummyEmbeddings(Embeddings):
+            def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                return [[0.0] for _ in texts]
+            def embed_query(self, text: str) -> List[float]:
+                return [0.0]
+        embeddings = DummyEmbeddings()
 
+    try:
         agent = SuggestionGeneratorAgent(llm, embeddings, optimization_mode)
         async for result in agent.handle_search("", history):  # Empty query since we only need history
             if result["type"] == "response":
                 return result["data"]
         return ["Unable to generate suggestions at this time"]
     except Exception as e:
-        logger.error("Error in generate_suggestions: %s", str(e))
+        # Log the error first with exact format
+        logger.error("Error in suggestion generation: %s", str(e))
+        # Then handle rate limit case
+        error_msg = str(e).lower()
+        if "rate limit" in error_msg or "ratelimit" in error_msg:
+            return ["Unable to generate suggestions due to rate limit - please try again later"]
+        # Default error case
         return ["Unable to generate suggestions at this time"]

@@ -1,169 +1,163 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from langchain.schema import HumanMessage, AIMessage
-from agents.writing_assistant_agent import handle_writing_assistance
+from unittest.mock import AsyncMock, MagicMock, patch
+from typing import List, Dict, Any, AsyncGenerator
+from langchain.schema import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
+from agents.writing_assistant_agent import WritingAssistantAgent, handle_writing_assistance
+from utils.logger import logger
 
+class TestWritingAssistantAgent:
+    """Test suite for WritingAssistantAgent"""
 
-@pytest.fixture
-def mock_chat_model():
-    mock = AsyncMock()
-    mock.arun = AsyncMock()
-    return mock
+    @pytest.fixture
+    def mock_llm(self):
+        """Fixture providing a mock LLM instance"""
+        llm = MagicMock(spec=BaseChatModel)
+        llm.ainvoke = AsyncMock()
+        return llm
 
-@pytest.fixture
-def mock_embeddings_model():
-    return AsyncMock()
+    @pytest.fixture
+    def mock_embeddings(self):
+        """Fixture providing a mock embeddings instance"""
+        return MagicMock(spec=Embeddings)
 
-@pytest.mark.asyncio
-async def test_handle_writing_assistance_basic(mock_chat_model):
-    query = "Help me write an introduction for an essay about climate change"
-    history = [
-        HumanMessage(content="Hello"),
-        AIMessage(content="Hi there!")
-    ]
+    @pytest.fixture
+    def writing_assistant(self, mock_llm, mock_embeddings):
+        """Fixture providing a WritingAssistantAgent instance"""
+        return WritingAssistantAgent(mock_llm, mock_embeddings, "balanced")
 
-    mock_chat_model.arun.return_value = """
-    Here's a possible introduction for your essay on climate change:
+    @pytest.fixture
+    def mock_generation(self):
+        """Fixture providing a mock Generation object"""
+        from langchain.schema import Generation
+        return Generation(text="test response")
 
-    Climate change is one of the most pressing issues facing our planet today. As global temperatures 
-    continue to rise, we are witnessing unprecedented changes in weather patterns, ecosystems, and 
-    human societies. This essay will explore the causes and consequences of climate change, as well 
-    as potential solutions to mitigate its effects.
-    """
+    @pytest.fixture
+    def mock_chat_history(self):
+        """Fixture providing standard chat history"""
+        return [HumanMessage(content="previous message")]
 
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
+    @pytest.mark.asyncio
+    async def test_create_retriever_chain(self, writing_assistant):
+        """Test retriever chain creation with valid query"""
+        chain = await writing_assistant.create_retriever_chain()
+        result = await chain.ainvoke({"query": "test query"})
+        assert result == {"query": "test query", "docs": []}
+
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_success(self, writing_assistant, mock_llm, mock_generation):
+        """Test answering chain with successful response"""
+        mock_llm.ainvoke.return_value = mock_generation
+        
+        chain = await writing_assistant.create_answering_chain()
+        result = await chain.ainvoke({
+            "query": "test query",
+            "chat_history": []
+        })
+        
         assert result["type"] == "response"
-        assert "climate change" in result["data"].lower()
-        assert "global temperatures" in result["data"].lower()
+        assert result["data"] == "test response"
 
-@pytest.mark.asyncio
-async def test_error_handling(mock_chat_model):
-    query = "test query"
-    history = []
-
-    mock_chat_model.arun.side_effect = Exception("LLM error")
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_error(self, writing_assistant, mock_llm):
+        """Test error handling in answering chain"""
+        mock_llm.ainvoke.side_effect = Exception("Test error")
+        
+        chain = await writing_assistant.create_answering_chain()
+        result = await chain.ainvoke({
+            "query": "test query",
+            "chat_history": []
+        })
+        
         assert result["type"] == "error"
-        assert "error" in result["data"].lower()
+        assert "error occurred" in result["data"]
 
-@pytest.mark.asyncio
-async def test_grammar_correction(mock_chat_model):
-    query = "Check grammar: 'The cat were sleeping on the couch.'"
-    history = []
+    @pytest.mark.asyncio
+    async def test_create_answering_chain_rate_limit(self, writing_assistant, mock_llm):
+        """Test rate limit handling in answering chain"""
+        mock_llm.ainvoke.side_effect = Exception("Rate limit exceeded")
+        
+        chain = await writing_assistant.create_answering_chain()
+        result = await chain.ainvoke({
+            "query": "test query",
+            "chat_history": []
+        })
+        
+        assert result["type"] == "error"
+        assert "rate limit" in result["data"].lower()
 
-    mock_chat_model.arun.return_value = """
-    The sentence has a grammar error. The correct version is:
-    'The cat was sleeping on the couch.'
+    def test_format_prompt(self, writing_assistant):
+        """Test prompt formatting"""
+        prompt = writing_assistant.format_prompt("test query", "")
+        assert "Writing Assistant" in prompt
+        assert "helping the user with their writing tasks" in prompt
 
-    Explanation:
-    - 'Cat' is singular, so it needs the singular verb form 'was'
-    - 'Were' is used for plural subjects
-    """
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
+    @pytest.mark.asyncio
+    async def test_parse_response(self, writing_assistant):
+        """Test response parsing"""
+        response = "test response"
+        result = await writing_assistant.parse_response(response)
         assert result["type"] == "response"
-        assert "was sleeping" in result["data"].lower()
-        assert "explanation" in result["data"].lower()
+        assert result["data"] == response
 
-@pytest.mark.asyncio
-async def test_paraphrasing_assistance(mock_chat_model):
-    query = "Help me paraphrase: 'The quick brown fox jumps over the lazy dog.'"
-    history = []
-
-    mock_chat_model.arun.return_value = """
-    Here are some paraphrased versions:
-    1. A swift russet fox leaps above the idle canine.
-    2. The agile brown fox bounds over the sleepy hound.
-    3. A nimble tawny fox hops across the lethargic dog.
-    """
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
+    @pytest.mark.asyncio
+    async def test_parse_response_empty(self, writing_assistant):
+        """Test parsing empty response"""
+        result = await writing_assistant.parse_response("")
         assert result["type"] == "response"
-        assert "fox" in result["data"].lower()
-        assert "dog" in result["data"].lower()
+        assert result["data"] == ""
 
-@pytest.mark.asyncio
-async def test_writing_style_suggestions(mock_chat_model):
-    query = "How can I make this sentence more formal: 'This thing is really good.'"
-    history = []
+    @pytest.mark.asyncio
+    async def test_handle_writing_assistance_success(self, mock_llm, mock_generation, mock_chat_history):
+        """Test writing assistance handler with successful response"""
+        mock_llm.ainvoke.return_value = mock_generation
+        
+        results = []
+        async for result in handle_writing_assistance("test query", mock_chat_history, mock_llm):
+            results.append(result)
+        
+        assert len(results) > 0
+        assert results[0]["type"] == "response"
+        assert "test response" in results[0]["data"]
 
-    mock_chat_model.arun.return_value = """
-    Here are more formal alternatives:
-    1. "This product demonstrates exceptional quality."
-    2. "This item exhibits remarkable effectiveness."
-    3. "This solution proves highly beneficial."
+    @pytest.mark.asyncio
+    async def test_handle_writing_assistance_error(self, mock_llm, mock_chat_history):
+        """Test error handling in writing assistance handler"""
+        mock_llm.ainvoke.side_effect = Exception("Test error")
+        
+        results = []
+        async for result in handle_writing_assistance("test query", mock_chat_history, mock_llm):
+            results.append(result)
+        
+        assert len(results) > 0
+        assert results[0]["type"] == "error"
+        assert "error occurred" in results[0]["data"]
 
-    The improvements include:
-    - Using specific nouns instead of "thing"
-    - Replacing informal intensifiers like "really"
-    - Employing more sophisticated vocabulary
-    """
+    @pytest.mark.asyncio
+    async def test_handle_writing_assistance_empty_query(self, mock_llm, mock_chat_history):
+        """Test handling empty query in writing assistance"""
+        results = []
+        async for result in handle_writing_assistance("", mock_chat_history, mock_llm):
+            results.append(result)
+        
+        assert len(results) > 0
+        assert "Please provide a query" in results[0]["data"]
 
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
-        assert result["type"] == "response"
-        assert "formal" in result["data"].lower()
-        assert "improvements" in result["data"].lower()
+    @pytest.mark.asyncio
+    async def test_handle_writing_assistance_invalid_history(self, mock_llm):
+        """Test handling invalid chat history"""
+        with pytest.raises(TypeError):
+            async for _ in handle_writing_assistance("test query", "invalid", mock_llm):
+                pass
 
-@pytest.mark.asyncio
-async def test_chat_history_integration(mock_chat_model):
-    query = "Can you revise it to be more concise?"
-    history = [
-        HumanMessage(content="Help me write about renewable energy"),
-        AIMessage(content="Renewable energy sources like solar and wind power are sustainable alternatives to fossil fuels.")
-    ]
-
-    mock_chat_model.arun.return_value = "Renewable energy offers sustainable alternatives to fossil fuels."
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
-        assert result["type"] == "response"
-        assert "renewable energy" in result["data"].lower()
-
-        # Verify chat history was passed to the model
-        call_args = mock_chat_model.arun.call_args[1]
-        assert "chat_history" in call_args
-        assert any("renewable energy" in str(msg.content) for msg in call_args["chat_history"])
-
-@pytest.mark.asyncio
-async def test_unused_embeddings_parameter(mock_chat_model, mock_embeddings_model):
-    query = "Help me write something"
-    history = []
-
-    # Should work the same with or without embeddings
-    async for result in handle_writing_assistance(query, history, mock_chat_model, mock_embeddings_model, "balanced"):
-        assert result["type"] in ["response", "error"]
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, None, "balanced"):
-        assert result["type"] in ["response", "error"]
-
-@pytest.mark.asyncio
-async def test_empty_query_handling(mock_chat_model):
-    query = ""
-    history = []
-
-    mock_chat_model.arun.return_value = "I'm not sure what you'd like help writing. Could you please provide more details?"
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
-        assert result["type"] == "response"
-        assert "provide more details" in result["data"].lower()
-
-@pytest.mark.asyncio
-async def test_long_content_handling(mock_chat_model):
-    query = "Help me write a long essay about artificial intelligence"
-    history = []
-
-    # Simulate a long response
-    mock_chat_model.arun.return_value = "A" * 10000 + "\nB" * 10000
-
-    async for result in handle_writing_assistance(query, history, mock_chat_model, optimization_mode="balanced"):
-        assert result["type"] == "response"
-        assert len(result["data"]) > 15000  # Should handle long content
-
-@pytest.mark.asyncio
-async def test_invalid_history_handling(mock_chat_model):
-    query = "Help me write something"
-    invalid_history = ["not a valid message"]  # Invalid history format
-
-    async for result in handle_writing_assistance(query, invalid_history, mock_chat_model, optimization_mode="balanced"):
-        # Should handle invalid history gracefully
-        assert result["type"] in ["response", "error"]
+    @pytest.mark.asyncio
+    async def test_handle_writing_assistance_logging(self, mock_llm, mock_chat_history):
+        """Test logging in writing assistance handler"""
+        with patch.object(logger, "error") as mock_logger:
+            mock_llm.ainvoke.side_effect = Exception("Test error")
+            
+            async for _ in handle_writing_assistance("test query", mock_chat_history, mock_llm):
+                pass
+            
+            mock_logger.assert_called_once_with("Error in writing assistance: %s", "Test error")

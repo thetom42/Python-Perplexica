@@ -10,15 +10,10 @@ from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableSequence
+from langchain_core.runnables import RunnableSequence, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from utils.logger import logger
 from agents.abstract_agent import AbstractAgent
-
-WRITING_ASSISTANT_PROMPT = """
-You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are currently set on focus mode 'Writing Assistant', this means you will be helping the user write a response to a given query.
-Since you are a writing assistant, you would not perform web searches. If you think you lack information to answer the query, you can ask the user for more information or suggest them to switch to a different focus mode.
-"""
 
 class WritingAssistantAgent(AbstractAgent):
     """Agent for providing writing assistance without web searches."""
@@ -29,51 +24,101 @@ class WritingAssistantAgent(AbstractAgent):
             """Process the input and return empty docs since we don't need retrieval."""
             return {"query": input_data["query"], "docs": []}
 
-        return RunnableSequence([process_input])
+        return RunnableSequence(
+            RunnableLambda(lambda x: x),  # Identity step
+            RunnableLambda(process_input)
+        )
 
     async def create_answering_chain(self) -> RunnableSequence:
         """Create the writing assistant answering chain."""
         prompt = ChatPromptTemplate.from_messages([
-            ("system", WRITING_ASSISTANT_PROMPT),
+            ("system", self.format_prompt("", "")),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{query}")
         ])
 
-        chain = prompt | self.llm
-        str_parser = StrOutputParser()
+        # Create the chain with proper output handling
+        chain = (
+            prompt
+            | self.llm
+            | RunnableLambda(lambda x: x.text if hasattr(x, "text") else str(x))
+        )
 
         async def generate_response(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Generate a response to the user's writing-related query."""
             try:
-                response = await chain.invoke({
+                response = await chain.ainvoke({
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
-
+                
+                # Handle different response types
+                if isinstance(response, str):
+                    return {
+                        "type": "response",
+                        "data": response
+                    }
+                elif hasattr(response, "text"):  # Handle Generation object
+                    return {
+                        "type": "response",
+                        "data": response.text
+                    }
+                elif hasattr(response, "content"):
+                    return {
+                        "type": "response",
+                        "data": response.content
+                    }
+                elif isinstance(response, dict):
+                    if "error" in response:
+                        return {
+                            "type": "error",
+                            "data": response["error"]
+                        }
+                    elif "response" in response:
+                        return {
+                            "type": "response",
+                            "data": response["response"]
+                        }
                 return {
                     "type": "response",
-                    "data": str_parser.parse(response.content)
+                    "data": str(response)
                 }
             except Exception as e:
                 logger.error("Error in writing assistant chain: %s", str(e))
                 return {
                     "type": "error",
-                    "data": "An error occurred while processing your writing request"
+                    "data": f"An error occurred: {str(e)}"
                 }
 
-        return RunnableSequence([generate_response])
+        return RunnableSequence(
+            RunnableLambda(lambda x: x),  # Identity step
+            RunnableLambda(generate_response)
+        )
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
-        # Not used as we use a fixed prompt template in create_answering_chain
-        return WRITING_ASSISTANT_PROMPT
+        base_prompt = self.create_base_prompt()
+        return f"""
+        {base_prompt}
+        
+        You are set on focus mode 'Writing Assistant', this means you will be helping the user with their writing tasks.
+        Your role is to assist with writing, editing, and improving text rather than performing web searches.
+        If you need more information to complete the writing task, ask the user for clarification or additional details.
+        """
 
     async def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the language model."""
-        return {
-            "type": "response",
-            "data": response
-        }
+        try:
+            return {
+                "type": "response",
+                "data": response
+            }
+        except Exception as e:
+            logger.error("Error parsing response: %s", str(e))
+            return {
+                "type": "error",
+                "data": "An error occurred while processing the response. Please try again."
+            }
 
 async def handle_writing_assistance(
     query: str,

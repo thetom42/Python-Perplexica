@@ -6,13 +6,12 @@ engines (arXiv, Google Scholar, PubMed) and processing the results using a langu
 generate concise, well-cited summaries.
 """
 
-from datetime import datetime
 from typing import List, Dict, Any, Literal, AsyncGenerator
 from langchain.schema import BaseMessage, Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 from langchain.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableSequence
+from langchain_core.runnables import RunnablePassthrough, RunnableSequence, RunnableParallel, RunnableLambda
 from lib.searxng import search_searxng
 from utils.logger import logger
 from agents.abstract_agent import AbstractAgent
@@ -47,10 +46,16 @@ class AcademicSearchAgent(AbstractAgent):
 
         retriever_chain = prompt | self.llm
 
-        async def process_llm_output(rephrased_query: str) -> Dict[str, Any]:
+        async def process_llm_output(x: Dict[str, Any]) -> Dict[str, Any]:
             """Process the LLM output and perform the academic search."""
-            if rephrased_query.strip() == "not_needed":
-                return {"query": "", "docs": []}
+            rephrased_query = x["rephrased_query"]
+            if isinstance(rephrased_query, str):
+                if rephrased_query.strip() == "not_needed":
+                    return {"query": "", "docs": []}
+            else:
+                rephrased_query = await rephrased_query
+                if rephrased_query.strip() == "not_needed":
+                    return {"query": "", "docs": []}
 
             try:
                 search_results = await search_searxng(rephrased_query, {
@@ -75,13 +80,13 @@ class AcademicSearchAgent(AbstractAgent):
                 logger.error("Error in academic search: %s", str(e))
                 return {"query": rephrased_query, "docs": []}
 
-        chain = RunnableSequence([
-            {
+        chain = RunnableSequence(
+            RunnableParallel({
                 "rephrased_query": retriever_chain,
                 "original_input": RunnablePassthrough()
-            },
-            lambda x: process_llm_output(x["rephrased_query"])
-        ])
+            }),
+            RunnableLambda(process_llm_output)
+        )
 
         return chain
 
@@ -92,7 +97,7 @@ class AcademicSearchAgent(AbstractAgent):
         async def process_retriever_output(input_data: Dict[str, Any]) -> Dict[str, Any]:
             """Process the retriever output and generate the final response."""
             try:
-                retriever_result = await retriever_chain.invoke({
+                retriever_result = await retriever_chain.ainvoke({
                     "query": input_data["query"],
                     "chat_history": input_data["chat_history"]
                 })
@@ -117,7 +122,7 @@ class AcademicSearchAgent(AbstractAgent):
 
                 response_chain = prompt | self.llm
 
-                response = await response_chain.invoke({
+                response = await response_chain.ainvoke({
                     "query": retriever_result["query"],
                     "context": context
                 })
@@ -135,43 +140,32 @@ class AcademicSearchAgent(AbstractAgent):
                 }
             except Exception as e:
                 logger.error("Error in response generation: %s", str(e))
+                error_msg = "An error occurred while processing the academic search results"
+                if "rate limit" in str(e).lower():
+                    error_msg = "Rate limit exceeded. Please try again later."
                 return {
-                    "response": "An error occurred while processing the academic search results",
+                    "response": error_msg,
                     "sources": []
                 }
 
-        return RunnableSequence([process_retriever_output])
+        return RunnableSequence(
+            RunnablePassthrough(),
+            RunnableLambda(process_retriever_output)
+        )
 
     def format_prompt(self, query: str, context: str) -> str:
         """Format the prompt for the language model."""
+        base_prompt = self.create_base_prompt()
         return f"""
-        You are Perplexica, an AI model who is expert at searching the web and answering user's queries. You are set on focus mode 'Academic', this means you will be searching for academic papers and articles on the web.
-
-        Generate a response that is informative and relevant to the user's query based on provided context (the context consits of search results containing a brief description of the content of that page).
-        You must use this context to answer the user's query in the best way possible. Use an unbaised and journalistic tone in your response. Do not repeat the text.
-        You must not tell the user to open any link or visit any website to get the answer. You must provide the answer in the response itself. If the user asks for links you can provide them.
-        Your responses should be medium to long in length be informative and relevant to the user's query. You can use markdowns to format your response. You should use bullet points to list the information. Make sure the answer is not short and is informative.
-        You have to cite the answer using [number] notation. You must cite the sentences with their relevent context number. You must cite each and every part of the answer so the user can know where the information is coming from.
-        Place these citations at the end of that particular sentence. You can cite the same sentence multiple times if it is relevant to the user's query like [number1][number2].
-        However you do not need to cite it using the same number. You can use different numbers to cite the same sentence multiple times. The number refers to the number of the search result (passed in the context) used to generate that part of the answer.
-
-        Anything inside the following `context` HTML block provided below is for your knowledge returned by the search engine and is not shared by the user. You have to answer question on the basis of it and cite the relevant information from it but you do not have to 
-        talk about the context in your response. 
-
+        {base_prompt}
+        
+        You are set on focus mode 'Academic', this means you will be searching for academic papers and articles on the web.
+        The context provided contains academic search results from sources like arXiv, Google Scholar, and PubMed.
+        
         <context>
         {context}
         </context>
-
-        If you think there's nothing relevant in the search results, you can say that 'Hmm, sorry I could not find any relevant information on this topic. Would you like me to search again or ask something else?'.
-        Anything between the `context` is retrieved from a search engine and is not a part of the conversation with the user. Today's date is {datetime.now().isoformat()}
         """
-
-    async def parse_response(self, response: str) -> Dict[str, Any]:
-        """Parse the response from the language model."""
-        return {
-            "type": "response",
-            "data": response
-        }
 
 async def handle_academic_search(
     query: str,

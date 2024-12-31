@@ -11,7 +11,7 @@ from agents import (
     handle_writing_assistance,
     handle_youtube_search,
 )
-from lib.providers import get_chat_model, get_embeddings_model
+from providers import get_chat_model, get_embeddings_model
 
 #__all__ = ['search_handlers', 'handle_message', 'convert_to_base_message']
 
